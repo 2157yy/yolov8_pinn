@@ -5,7 +5,7 @@ __pycache__/
 # Environment files
 .env
 .env.*
-qwen_demo.env
+#qwen_demo.env
 
 # Runtime data
 memory/*.jsonl
