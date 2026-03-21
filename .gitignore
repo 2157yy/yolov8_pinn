@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment files
+.env
+.env.*
+qwen_demo.env
+
+# Runtime data
+memory/*.jsonl
+tmp/*.jsonl
+
+# Local editor and OS files
+/.vscode/
+.DS_Store

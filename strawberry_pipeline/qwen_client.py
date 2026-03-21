@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Iterator
 from urllib import error, request
 
 
@@ -17,6 +18,7 @@ class QwenClientConfig:
 
     @classmethod
     def from_env(cls) -> "QwenClientConfig":
+        _load_default_env_files()
         base_url = os.getenv("QWEN_BASE_URL", "").strip()
         api_key = os.getenv("QWEN_API_KEY", "").strip()
         model = os.getenv("QWEN_MODEL", "").strip()
@@ -35,6 +37,46 @@ class QwenClientConfig:
             timeout_seconds=timeout_seconds,
             temperature=temperature,
         )
+
+
+def _load_default_env_files() -> None:
+    env_candidates = []
+    explicit_env_file = os.getenv("QWEN_ENV_FILE", "").strip()
+    if explicit_env_file:
+        env_candidates.append(Path(explicit_env_file))
+
+    cwd = Path.cwd()
+    env_candidates.extend(
+        [
+            cwd / "qwen_demo.env",
+            cwd / ".env",
+        ]
+    )
+
+    seen_paths: set[Path] = set()
+    for candidate in env_candidates:
+        resolved = candidate.expanduser().resolve()
+        if resolved in seen_paths or not resolved.exists():
+            continue
+        seen_paths.add(resolved)
+        _load_env_file(resolved)
+
+
+def _load_env_file(path: Path) -> None:
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 class QwenClientError(RuntimeError):
@@ -87,6 +129,61 @@ class QwenChatClient:
             payload.update(extra_body)
         raw_response = self._post_json(payload)
         return self._extract_message_content(raw_response)
+
+    def chat_stream(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+            "temperature": self.config.temperature if temperature is None else temperature,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if extra_body:
+            payload.update(extra_body)
+
+        body = json.dumps(payload).encode("utf-8")
+        req = request.Request(
+            url=self._chat_completions_url(),
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.config.api_key}",
+            },
+        )
+
+        try:
+            with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+
+                    chunk_text = line[5:].strip()
+                    if chunk_text == "[DONE]":
+                        yield {"type": "done"}
+                        break
+
+                    try:
+                        parsed = json.loads(chunk_text)
+                    except json.JSONDecodeError as exc:
+                        raise QwenClientError("Qwen stream chunk was not valid JSON") from exc
+
+                    if isinstance(parsed, dict) and parsed.get("error"):
+                        raise QwenClientError(f"Qwen API returned an error: {parsed['error']}")
+
+                    yield self._extract_stream_chunk(parsed)
+        except error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise QwenClientError(f"Qwen HTTP error {exc.code}: {detail}") from exc
+        except error.URLError as exc:
+            raise QwenClientError(f"Qwen request failed: {exc.reason}") from exc
 
     def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
@@ -163,3 +260,24 @@ class QwenChatClient:
         if not isinstance(parsed, dict):
             raise QwenClientError("Qwen output JSON was not an object")
         return parsed
+
+    @staticmethod
+    def _extract_stream_chunk(response_payload: dict[str, Any]) -> dict[str, Any]:
+        choices = response_payload.get("choices") or []
+        usage = response_payload.get("usage")
+        if not choices:
+            return {
+                "type": "usage",
+                "usage": usage,
+            }
+
+        choice = choices[0]
+        delta = choice.get("delta") or {}
+        return {
+            "type": "chunk",
+            "role": delta.get("role"),
+            "content_delta": delta.get("content") or "",
+            "reasoning_delta": delta.get("reasoning_content") or "",
+            "finish_reason": choice.get("finish_reason"),
+            "usage": usage,
+        }

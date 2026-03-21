@@ -1,0 +1,12 @@
+# Current Qwen chat + dashboard bridge uses only Python standard library.
+# No third-party Python packages are required for:
+# - run_qwen_demo.py
+# - run_qwen_chat.py
+# - qwen_web_chat.py
+# - strawberry_pipeline/*
+#
+# Recommended Python version:
+# python>=3.10
+#
+# If you later switch from MockPerceptionModule to a real YOLO/vision pipeline,
+# you will need additional packages such as torch / ultralytics separately.
