@@ -11,6 +11,26 @@ __pycache__/
 memory/*.jsonl
 tmp/*.jsonl
 
+# Uploaded images
+uploads/
+
+# Model weight files (large binaries)
+models/*.pt
+models/*.onnx
+models/*.pth
+
+# Claude Code runtime state
+.omx/
+
+# External cloned dataset repo (4.6 GB, not part of this project)
+strawberry_diseases/
+
+# Model download caches
+models/._____temp/
+models/.lock/
+models/.mscache/
+models/AI-ModelScope/
+
 # Local editor and OS files
 /.vscode/
 .DS_Store

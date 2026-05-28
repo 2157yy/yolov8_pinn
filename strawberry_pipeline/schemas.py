@@ -22,6 +22,14 @@ class StrawberryDetection:
 
 
 @dataclass(slots=True)
+class DiseaseDetection:
+    bbox: BoundingBox
+    disease_class: int
+    disease_name: str
+    confidence: float
+
+
+@dataclass(slots=True)
 class SceneSummary:
     avg_light: float
     time_period: str
@@ -35,6 +43,7 @@ class PerceptionResult:
     detections: list[StrawberryDetection]
     scene_summary: SceneSummary
     source: str = "yolo_pinn"
+    disease_detections: list[DiseaseDetection] = field(default_factory=list)
 
 
 @dataclass(slots=True)

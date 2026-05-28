@@ -142,17 +142,45 @@
 
           <aside class="card side">
             <p class="eyebrow">Quick Ask</p>
-            <h3>推荐问题</h3>
+            <h3>{{ selectedImage ? '病害检测问题' : '推荐问题' }}</h3>
             <div class="stack">
-              <button v-for="question in suggestedQuestions" :key="question" class="ghost block" :disabled="qwenLoading" @click="useSuggestedQuestion(question)">{{ question }}</button>
+              <button v-for="question in (selectedImage ? diseaseQuestions : suggestedQuestions)" :key="question" class="ghost block" :disabled="qwenLoading" @click="useSuggestedQuestion(question)">{{ question }}</button>
             </div>
             <div class="divider"></div>
             <p class="eyebrow">Live Hints</p>
-            <div class="muted">{{ qwenLoading ? currentThinkingMessage : latestSummaryText }}</div>
+            <div class="muted">{{ selectedImage && !qwenLoading ? '点击发送将上传图片进行 YOLO 病害检测 + Qwen 分析' : qwenLoading ? currentThinkingMessage : latestSummaryText }}</div>
           </aside>
         </div>
 
         <div v-if="qwenError" class="error">{{ qwenError }}</div>
+
+        <div class="upload-section">
+          <input ref="imageInput" type="file" accept="image/*" hidden @change="handleImageSelect" />
+          <div
+            v-if="!selectedImagePreview"
+            class="upload-zone"
+            @click="$refs.imageInput.click()"
+            @dragover.prevent
+            @dragenter.prevent
+            @drop.prevent="handleImageDrop"
+          >
+            <span class="upload-icon">+</span>
+            <span class="muted">上传草莓图片进行病害检测（点击或拖拽）</span>
+          </div>
+          <div v-else class="image-preview-row">
+            <div class="image-thumb" :style="{ backgroundImage: `url(${selectedImagePreview})` }"></div>
+            <div class="image-info">
+              <span class="upload-label">{{ selectedImage ? selectedImage.name : '已选择图片' }}</span>
+              <span v-if="detectionCount > 0" class="pill">{{ detectionCount }} 处病害</span>
+              <div class="detection-chips" v-if="latestDetections.length > 0">
+                <span v-for="(d, idx) in latestDetections" :key="idx" class="chip" :class="d.confidence > 0.7 ? 'good' : 'warn'">
+                  {{ d.disease_name }} {{ (d.confidence * 100).toFixed(0) }}%
+                </span>
+              </div>
+            </div>
+            <button class="ghost small" :disabled="qwenLoading" @click.stop="removeImage">移除</button>
+          </div>
+        </div>
 
         <div class="composer">
           <textarea v-model="qwenInput" rows="4" placeholder="例如：现在适合采摘吗？还需要补光吗？" @keydown="handleQwenKeydown"></textarea>
@@ -211,11 +239,17 @@ export default {
       qwenError: '',
       qwenMessages: [welcomeMessage()],
       suggestedQuestions: ['现在适合采摘吗？', '需要补光吗？', '当前最大风险是什么？'],
+      diseaseQuestions: ['这是什么病害？严重吗？', '应该如何防治？', '是否需要人工复核？', '对产量有什么影响？'],
       qwenSession: { imageId: 'web_qwen_image_001', plotId: 'plot_demo', plantBatchId: 'batch_demo' },
-      qwenLoadingHints: ['正在读取草莓上下文', '正在分析成熟度与光照线索', '正在整理采摘建议', '正在组织自然语言回复'],
+      qwenLoadingHints: ['正在运行 YOLO 病害检测', '正在分析检测结果', '正在整理防治建议', '正在组织自然语言回复'],
       qwenLoadingHintIndex: 0,
       qwenLoadingTimer: null,
-      latestContextSummary: null
+      latestContextSummary: null,
+      selectedImage: null,
+      selectedImagePreview: '',
+      detectionCount: 0,
+      latestDetections: [],
+      detectionMode: false
     }
   },
   computed: {
@@ -236,6 +270,11 @@ export default {
     latestSummaryText() {
       const summary = this.latestContextSummary
       if (!summary) return '提问后会先显示分析阶段，再逐步输出答案。'
+      if (summary.detection_count !== undefined) {
+        return summary.detection_count === 0
+          ? '最近检测：未发现已知病害，植株健康。'
+          : `最近检测：发现 ${summary.detection_count} 处病害。`
+      }
       if (summary.harvest === true) return '最近结论：可考虑采摘，建议结合人工复核。'
       if (summary.harvest === false) return '最近结论：暂不建议采摘，建议继续观察。'
       return summary.decision_message || '最近已经生成新的分析结论。'
@@ -342,11 +381,24 @@ export default {
     getThinkingPreview(reasoning, summary) {
       const compact = String(reasoning || '').replace(/\s+/g, ' ').trim()
       if (compact) return compact.length > 90 ? compact.slice(-90) : compact
+      if (summary?.detections && summary.detections.length > 0) {
+        const names = summary.detections.map((d) => d.disease_name).join('、')
+        return `检测到: ${names}`
+      }
+      if (summary?.detection_count === 0) return '未检测到已知病害'
       if (summary?.decision_message) return `初步结论：${summary.decision_message}`
-      return 'Qwen 正在结合成熟度、光照和历史记录进行推理...'
+      return 'Qwen 正在结合检测结果进行推理...'
     },
     getThinkingStages(message) {
       const status = message.status || 'queued'
+      const hasDetections = this.detectionMode || (message.contextSummary && message.contextSummary.detections)
+      if (hasDetections) {
+        return [
+          { label: 'YOLO检测', state: status === 'detecting' ? 'active' : ['ready', 'thinking', 'answering', 'done'].includes(status) ? 'done' : 'todo' },
+          { label: '分析病害', state: status === 'thinking' ? 'active' : ['answering', 'done'].includes(status) ? 'done' : 'todo' },
+          { label: '生成回复', state: status === 'answering' ? 'active' : status === 'done' ? 'done' : 'todo' }
+        ]
+      }
       return [
         { label: '读取上下文', state: ['ready', 'thinking', 'answering', 'done'].includes(status) ? 'done' : 'todo' },
         { label: '分析线索', state: status === 'thinking' ? 'active' : ['answering', 'done'].includes(status) ? 'done' : 'todo' },
@@ -354,13 +406,23 @@ export default {
       ]
     },
     getMessageStatusLabel(message) {
-      if (message.status === 'ready') return '已拿到上下文，准备分析'
+      if (message.status === 'detecting') return '正在运行 YOLO 病害检测...'
+      if (message.status === 'ready') return '检测完成，正在分析病害结果'
       if (message.status === 'thinking') return this.currentQwenHint
       if (message.status === 'answering') return '分析完成，正在组织回复'
       return '正在准备上下文'
     },
     getSummaryChips(summary) {
       if (!summary) return []
+      if (summary.detections && summary.detections.length > 0) {
+        return summary.detections.slice(0, 4).map((d) => ({
+          text: `${d.disease_name} ${(d.confidence * 100).toFixed(0)}%`,
+          tone: d.confidence > 0.7 ? 'warn' : 'info'
+        }))
+      }
+      if (summary.detection_count !== undefined) {
+        return [{ text: `检测结果: ${summary.detection_count} 处病害`, tone: summary.detection_count > 0 ? 'warn' : 'good' }]
+      }
       const chips = []
       if (summary.harvest === true) chips.push({ text: '可考虑采摘', tone: 'good' })
       if (summary.harvest === false) chips.push({ text: '暂不建议采摘', tone: 'warn' })
@@ -382,9 +444,22 @@ export default {
       return remain
     },
     applyStreamEvent(event, assistantMessage) {
+      if (event.type === 'status' && event.stage === 'detecting') {
+        assistantMessage.status = 'detecting'
+      }
       if (event.type === 'ready') {
         assistantMessage.status = 'ready'
-        assistantMessage.contextSummary = event.context_summary || null
+        if (event.detections) {
+          this.detectionCount = event.detection_count || 0
+          this.latestDetections = event.detections || []
+          assistantMessage.contextSummary = {
+            detection_count: event.detection_count,
+            detections: event.detections,
+            scene: event.scene
+          }
+        } else {
+          assistantMessage.contextSummary = event.context_summary || null
+        }
         this.latestContextSummary = assistantMessage.contextSummary || this.latestContextSummary
       }
       if (event.type === 'thinking' && event.delta) {
@@ -401,6 +476,9 @@ export default {
         assistantMessage.pending = false
         assistantMessage.status = 'done'
         this.latestContextSummary = assistantMessage.contextSummary || this.latestContextSummary
+        if (this.detectionMode) {
+          this.removeImage()
+        }
       }
       if (event.type === 'error') {
         assistantMessage.pending = false
@@ -409,10 +487,47 @@ export default {
       }
       return ''
     },
+    handleImageSelect(event) {
+      const file = event.target.files?.[0]
+      if (!file) return
+      this.setSelectedImage(file)
+    },
+    handleImageDrop(event) {
+      const file = event.dataTransfer?.files?.[0]
+      if (!file) return
+      this.setSelectedImage(file)
+    },
+    setSelectedImage(file) {
+      if (!/\.(jpe?g|png|bmp|tiff?|webp)$/i.test(file.name)) {
+        window.alert('仅支持 jpg、png、bmp、tif、webp 格式的图片')
+        return
+      }
+      this.selectedImage = file
+      this.detectionCount = 0
+      this.latestDetections = []
+      this.detectionMode = true
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        this.selectedImagePreview = e.target.result
+      }
+      reader.readAsDataURL(file)
+    },
+    removeImage() {
+      this.selectedImage = null
+      this.selectedImagePreview = ''
+      this.detectionCount = 0
+      this.latestDetections = []
+      this.detectionMode = false
+      if (this.$refs.imageInput) {
+        this.$refs.imageInput.value = ''
+      }
+    },
     async sendQwenMessage() {
       const content = this.qwenInput.trim()
-      if (!content || this.qwenLoading) return
-      const userMessage = { id: `u-${Date.now()}`, role: 'user', content, pending: false, reasoning: '', status: 'done', contextSummary: null, timestamp: new Date() }
+      if ((!content && !this.selectedImage) || this.qwenLoading) return
+      const userContent = content || '请分析这张图片中的草莓病害情况'
+      const hasImage = !!this.selectedImage
+      const userMessage = { id: `u-${Date.now()}`, role: 'user', content: userContent, pending: false, reasoning: '', status: 'done', contextSummary: null, timestamp: new Date() }
       const assistantMessage = { id: `a-${Date.now()}`, role: 'assistant', content: '', pending: true, reasoning: '', status: 'queued', contextSummary: null, timestamp: new Date() }
       const messages = [...this.qwenMessages, userMessage].map((item) => ({ role: item.role, content: item.content }))
       this.qwenMessages.push(userMessage, assistantMessage)
@@ -421,13 +536,25 @@ export default {
       this.qwenError = ''
       this.startQwenTicker()
       this.scrollChat()
+
+      const apiPath = hasImage ? '/api/detect/chat/stream' : '/api/qwen/chat/stream'
+      let body
+      let headers = {}
+
+      if (hasImage) {
+        const form = new FormData()
+        form.append('image', this.selectedImage)
+        form.append('message', userContent)
+        form.append('messages', JSON.stringify(messages))
+        body = form
+      } else {
+        headers['Content-Type'] = 'application/json'
+        body = JSON.stringify({ message: userContent, messages, imageId: this.qwenSession.imageId, plotId: this.qwenSession.plotId, plantBatchId: this.qwenSession.plantBatchId })
+      }
+
       try {
-        const response = await fetch('/api/qwen/chat/stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: content, messages, imageId: this.qwenSession.imageId, plotId: this.qwenSession.plotId, plantBatchId: this.qwenSession.plantBatchId })
-        })
-        if (!response.ok || !response.body) throw new Error('Qwen 暂时无法回答')
+        const response = await fetch(apiPath, { method: 'POST', headers, body })
+        if (!response.ok || !response.body) throw new Error(hasImage ? '病害检测服务暂时无法响应' : 'Qwen 暂时无法回答')
         const reader = response.body.getReader()
         const decoder = new TextDecoder('utf-8')
         let buffer = ''
@@ -476,5 +603,6 @@ h1,h2,h3,p{margin:0}.pill,.chip,.primary,.ghost{border:none;border-radius:999px}
 .message{margin-top:12px;white-space:pre-wrap;line-height:1.72}.cursor{display:inline-block;width:8px;height:1em;margin-left:3px;vertical-align:middle;border-radius:2px;background:#9fe0ff;animation:blink .9s infinite}.dots{display:inline-flex;gap:4px}.dots span{width:7px;height:7px;border-radius:50%;background:#7bd5ff;animation:bounce 1.1s infinite ease-in-out}.dots span:nth-child(2){animation-delay:.15s}.dots span:nth-child(3){animation-delay:.3s}
 .side{height:fit-content}.divider{height:1px;background:rgba(255,255,255,.08);margin:14px 0}.composer{display:grid;gap:12px;margin-top:14px}.composer textarea{width:100%;min-height:108px;padding:14px 16px;border-radius:16px;border:1px solid rgba(255,255,255,.12);background:rgba(3,12,24,.56);color:#f3fbff;resize:vertical}.composer-row{justify-content:space-between}.error{padding:12px 14px;border-radius:14px;background:rgba(255,115,87,.12);color:#ffc0b2}
 @keyframes bounce{0%,80%,100%{transform:translateY(0);opacity:.6}40%{transform:translateY(-4px);opacity:1}}@keyframes blink{0%,45%{opacity:1}55%,100%{opacity:.2}}
-@media (max-width:1080px){.grid,.chat-layout{grid-template-columns:1fr}}@media (max-width:720px){.topbar{flex-direction:column;align-items:flex-start}.content{padding:16px}.bubble{max-width:100%}.composer-row{flex-direction:column;align-items:stretch}}
+.upload-section{margin-top:14px}.upload-zone{display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px;border:2px dashed rgba(255,255,255,.14);border-radius:16px;cursor:pointer;transition:border-color .2s ease}.upload-zone:hover{border-color:rgba(111,198,255,.42)}.upload-icon{font-size:1.8rem;color:#8cc4ff}.image-preview-row{display:flex;align-items:center;gap:14px;padding:12px;border:1px solid rgba(255,255,255,.1);border-radius:16px;background:rgba(5,15,27,.52)}.image-thumb{width:68px;height:68px;border-radius:12px;background-size:cover;background-position:center;border:1px solid rgba(255,255,255,.14);flex-shrink:0}.image-info{flex:1;min-width:0}.upload-label{font-weight:600}.detection-chips{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+@media (max-width:1080px){.grid,.chat-layout{grid-template-columns:1fr}}@media (max-width:720px){.topbar{flex-direction:column;align-items:flex-start}.content{padding:16px}.bubble{max-width:100%}.composer-row{flex-direction:column;align-items:stretch}.image-preview-row{flex-direction:column;align-items:stretch}}
 </style>

@@ -1,5 +1,7 @@
 import cors from 'cors'
 import express from 'express'
+import fs from 'fs'
+import multer from 'multer'
 import path from 'path'
 import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
@@ -11,14 +13,51 @@ const __dirname = path.dirname(__filename)
 const projectRoot = path.resolve(__dirname, '..')
 const distDir = path.join(__dirname, 'dist')
 const qwenBridgeScript = path.join(projectRoot, 'qwen_web_chat.py')
+const detectBridgeScript = path.join(projectRoot, 'detect_bridge.py')
+const detectChatBridgeScript = path.join(projectRoot, 'detect_chat_bridge.py')
 const pythonCandidates = process.env.PYTHON_COMMAND
   ? [process.env.PYTHON_COMMAND]
   : process.platform === 'win32'
     ? ['py', 'python']
     : ['python3', 'python']
 
+const uploadDir = path.join(projectRoot, 'uploads')
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true })
+}
+
+const storage = multer.diskStorage({
+  destination: uploadDir,
+  filename(_req, file, cb) {
+    const ext = path.extname(file.originalname) || '.jpg'
+    const name = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`
+    cb(null, name)
+  }
+})
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 16 * 1024 * 1024 },
+  fileFilter(_req, file, cb) {
+    const allowed = /\.(jpe?g|png|bmp|tiff?|webp)$/i
+    if (!allowed.test(path.extname(file.originalname))) {
+      cb(new Error('Unsupported image format'))
+      return
+    }
+    cb(null, true)
+  }
+})
+
 app.use(cors())
 app.use(express.json({ limit: '1mb' }))
+
+function safeJsonParse(value, fallback) {
+  if (typeof value === 'string') {
+    try { return JSON.parse(value) } catch (_) { return fallback }
+  }
+  if (Array.isArray(value) || (value && typeof value === 'object')) return value
+  return fallback
+}
 
 let sensorData = {
   temperature: 25.3,
@@ -42,13 +81,6 @@ let settings = {
   tempThreshold: { min: 18, max: 32 },
   enableSoundAlarm: true
 }
-
-devices = [
-  { id: 1, name: '通风系统', status: true, power: 75 },
-  { id: 2, name: '灌溉系统', status: false, power: 0 },
-  { id: 3, name: '补光系统', status: true, power: 60 },
-  { id: 4, name: '加湿系统', status: false, power: 0 }
-]
 
 function buildHistory(period = 'day') {
   const history = []
@@ -74,14 +106,19 @@ function buildHistory(period = 'day') {
   return history
 }
 
+function sendSseEvent(res, event) {
+  res.write(`data: ${JSON.stringify(event)}\n\n`)
+}
+
+// ---------------------------------------------------------------------------
+// Qwen bridge helpers
+// ---------------------------------------------------------------------------
+
 function spawnPython(command, payload) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, [qwenBridgeScript], {
       cwd: projectRoot,
-      env: {
-        ...process.env,
-        PYTHONIOENCODING: 'utf-8'
-      }
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     })
 
     let stdout = ''
@@ -89,15 +126,10 @@ function spawnPython(command, payload) {
     const timer = setTimeout(() => {
       child.kill()
       reject(new Error(`Qwen bridge timed out while using ${command}`))
-    }, 90000)
+    }, 180000)
 
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString()
-    })
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString()
-    })
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
 
     child.on('error', (error) => {
       clearTimeout(timer)
@@ -110,7 +142,6 @@ function spawnPython(command, payload) {
         reject(new Error(stderr.trim() || `${command} exited with code ${code}`))
         return
       }
-
       try {
         const parsed = JSON.parse(stdout || '{}')
         if (!parsed.success) {
@@ -119,11 +150,7 @@ function spawnPython(command, payload) {
         }
         resolve(parsed)
       } catch (error) {
-        reject(
-          new Error(
-            `Unable to parse Qwen bridge output from ${command}: ${stdout || stderr || error.message}`
-          )
-        )
+        reject(new Error(`Unable to parse Qwen bridge output from ${command}: ${stdout || stderr || error.message}`))
       }
     })
 
@@ -134,30 +161,18 @@ function spawnPython(command, payload) {
 
 async function runQwenBridge(payload) {
   const errors = []
-
   for (const command of pythonCandidates) {
-    try {
-      return await spawnPython(command, payload)
-    } catch (error) {
-      errors.push(`${command}: ${error.message}`)
-    }
+    try { return await spawnPython(command, payload) }
+    catch (error) { errors.push(`${command}: ${error.message}`) }
   }
-
   throw new Error(errors.join(' | '))
-}
-
-function sendSseEvent(res, event) {
-  res.write(`data: ${JSON.stringify(event)}\n\n`)
 }
 
 function streamWithPython(command, payload, req, res) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, [qwenBridgeScript], {
       cwd: projectRoot,
-      env: {
-        ...process.env,
-        PYTHONIOENCODING: 'utf-8'
-      }
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     })
 
     let stderr = ''
@@ -166,67 +181,42 @@ function streamWithPython(command, payload, req, res) {
     const timer = setTimeout(() => {
       child.kill()
       reject(new Error(`Qwen bridge timed out while using ${command}`))
-    }, 90000)
+    }, 180000)
 
     const cleanup = () => {
       clearTimeout(timer)
       req.off('close', handleClose)
     }
-
-    const handleClose = () => {
-      child.kill()
-    }
-
+    const handleClose = () => { child.kill() }
     req.on('close', handleClose)
 
     child.stdout.on('data', (chunk) => {
       stdoutBuffer += chunk.toString()
       const lines = stdoutBuffer.split(/\r?\n/)
       stdoutBuffer = lines.pop() || ''
-
       for (const line of lines) {
         const trimmed = line.trim()
         if (!trimmed) continue
-        try {
-          const event = JSON.parse(trimmed)
-          sendSseEvent(res, event)
-        } catch (error) {
-          sendSseEvent(res, {
-            type: 'error',
-            error: `Unable to parse streaming chunk from ${command}: ${trimmed}`
-          })
-        }
+        try { sendSseEvent(res, JSON.parse(trimmed)) }
+        catch (_error) { sendSseEvent(res, { type: 'error', error: `Unable to parse streaming chunk from ${command}: ${trimmed}` }) }
       }
     })
 
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString()
-    })
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
 
     child.on('error', (error) => {
       if (settled) return
-      settled = true
-      cleanup()
-      reject(error)
+      settled = true; cleanup(); reject(error)
     })
 
     child.on('close', (code) => {
       if (settled) return
-      settled = true
-      cleanup()
-
+      settled = true; cleanup()
       const finalChunk = stdoutBuffer.trim()
       if (finalChunk) {
-        try {
-          sendSseEvent(res, JSON.parse(finalChunk))
-        } catch (_error) {
-          sendSseEvent(res, {
-            type: 'error',
-            error: `Unable to parse final streaming chunk from ${command}: ${finalChunk}`
-          })
-        }
+        try { sendSseEvent(res, JSON.parse(finalChunk)) }
+        catch (_error) { sendSseEvent(res, { type: 'error', error: `Unable to parse final streaming chunk from ${command}: ${finalChunk}` }) }
       }
-
       if (code !== 0) {
         reject(new Error(stderr.trim() || `${command} exited with code ${code}`))
         return
@@ -241,55 +231,222 @@ function streamWithPython(command, payload, req, res) {
 
 async function runQwenBridgeStream(payload, req, res) {
   const errors = []
-
   for (const command of pythonCandidates) {
-    try {
-      await streamWithPython(command, payload, req, res)
-      return
-    } catch (error) {
-      errors.push(`${command}: ${error.message}`)
-    }
+    try { await streamWithPython(command, payload, req, res); return }
+    catch (error) { errors.push(`${command}: ${error.message}`) }
   }
+  sendSseEvent(res, { type: 'error', error: errors.join(' | ') })
+}
 
-  sendSseEvent(res, {
-    type: 'error',
-    error: errors.join(' | ')
+// ---------------------------------------------------------------------------
+// Detect bridge helpers
+// ---------------------------------------------------------------------------
+
+async function spawnDetectBridge(payload, command) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [detectBridgeScript], {
+      cwd: projectRoot,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    })
+
+    let stdout = ''
+    let stderr = ''
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error(`Detect bridge timed out using ${command}`))
+    }, 120000)
+
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+
+    child.on('error', (error) => { clearTimeout(timer); reject(error) })
+
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code !== 0 && !stdout.trim()) {
+        reject(new Error(stderr.trim() || `${command} exited with code ${code}`))
+        return
+      }
+      try {
+        const parsed = JSON.parse(stdout || '{}')
+        if (!parsed.success) {
+          reject(new Error(parsed.error || 'Detect bridge returned an unknown error'))
+          return
+        }
+        resolve(parsed)
+      } catch (error) {
+        reject(new Error(`Unable to parse detect bridge output from ${command}: ${stdout || stderr || error.message}`))
+      }
+    })
+
+    child.stdin.write(JSON.stringify(payload))
+    child.stdin.end()
   })
 }
 
-app.get('/api/health', (_req, res) => {
-  res.json({
-    success: true,
-    message: 'smart-greenhouse-dashboard server is running'
+async function runDetectBridge(payload) {
+  const errors = []
+  for (const command of pythonCandidates) {
+    try { return await spawnDetectBridge(payload, command) }
+    catch (error) { errors.push(`${command}: ${error.message}`) }
+  }
+  throw new Error(errors.join(' | '))
+}
+
+// ---------------------------------------------------------------------------
+// Detect + Chat bridge helpers
+// ---------------------------------------------------------------------------
+
+async function spawnDetectChatBridge(payload, command) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [detectChatBridgeScript], {
+      cwd: projectRoot,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    })
+
+    let stdout = ''
+    let stderr = ''
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error(`Detect chat bridge timed out using ${command}`))
+    }, 180000)
+
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+
+    child.on('error', (error) => { clearTimeout(timer); reject(error) })
+
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code !== 0 && !stdout.trim()) {
+        reject(new Error(stderr.trim() || `${command} exited with code ${code}`))
+        return
+      }
+      try {
+        const parsed = JSON.parse(stdout || '{}')
+        if (!parsed.success) {
+          reject(new Error(parsed.error || 'Detect chat bridge returned an unknown error'))
+          return
+        }
+        resolve(parsed)
+      } catch (error) {
+        reject(new Error(`Unable to parse detect chat bridge output from ${command}: ${stdout || stderr || error.message}`))
+      }
+    })
+
+    child.stdin.write(JSON.stringify(payload))
+    child.stdin.end()
   })
+}
+
+async function runDetectChatBridge(payload) {
+  const errors = []
+  for (const command of pythonCandidates) {
+    try { return await spawnDetectChatBridge(payload, command) }
+    catch (error) { errors.push(`${command}: ${error.message}`) }
+  }
+  throw new Error(errors.join(' | '))
+}
+
+function streamDetectChatBridge(payload, command, req, res) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [detectChatBridgeScript], {
+      cwd: projectRoot,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    })
+
+    let stderr = ''
+    let stdoutBuffer = ''
+    let settled = false
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error(`Detect chat bridge timed out using ${command}`))
+    }, 180000)
+
+    const cleanup = () => {
+      clearTimeout(timer)
+      req.off('close', handleClose)
+    }
+    const handleClose = () => { child.kill() }
+    req.on('close', handleClose)
+
+    child.stdout.on('data', (chunk) => {
+      stdoutBuffer += chunk.toString()
+      const lines = stdoutBuffer.split(/\r?\n/)
+      stdoutBuffer = lines.pop() || ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        try { sendSseEvent(res, JSON.parse(trimmed)) }
+        catch (_error) { sendSseEvent(res, { type: 'error', error: `Unable to parse streaming chunk from ${command}: ${trimmed}` }) }
+      }
+    })
+
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+
+    child.on('error', (error) => {
+      if (settled) return
+      settled = true; cleanup(); reject(error)
+    })
+
+    child.on('close', (code) => {
+      if (settled) return
+      settled = true; cleanup()
+      const finalChunk = stdoutBuffer.trim()
+      if (finalChunk) {
+        try { sendSseEvent(res, JSON.parse(finalChunk)) }
+        catch (_error) { sendSseEvent(res, { type: 'error', error: `Unable to parse final streaming chunk from ${command}: ${finalChunk}` }) }
+      }
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `${command} exited with code ${code}`))
+        return
+      }
+      resolve()
+    })
+
+    child.stdin.write(JSON.stringify({ ...payload, stream: true }))
+    child.stdin.end()
+  })
+}
+
+async function runDetectChatBridgeStream(payload, req, res) {
+  const errors = []
+  for (const command of pythonCandidates) {
+    try { await streamDetectChatBridge(payload, command, req, res); return }
+    catch (error) { errors.push(`${command}: ${error.message}`) }
+  }
+  sendSseEvent(res, { type: 'error', error: errors.join(' | ') })
+}
+
+// ===========================================================================
+// API Routes
+// ===========================================================================
+
+app.get('/api/health', (_req, res) => {
+  res.json({ success: true, message: 'smart-greenhouse-dashboard server is running' })
 })
+
+// -- Qwen status -----------------------------------------------------------
 
 app.get('/api/qwen/status', (_req, res) => {
   res.json({
     success: true,
-    data: {
-      pythonCandidates,
-      qwenBridgeScript
-    }
+    data: { pythonCandidates, qwenBridgeScript }
   })
 })
+
+// -- Qwen chat -------------------------------------------------------------
 
 app.post('/api/qwen/chat', async (req, res) => {
   const message = String(req.body?.message || '').trim()
   const messages = Array.isArray(req.body?.messages) ? req.body.messages : []
-
   if (!message && messages.length === 0) {
-    res.status(400).json({
-      success: false,
-      error: 'message is required'
-    })
+    res.status(400).json({ success: false, error: 'message is required' })
     return
   }
-
   try {
     const response = await runQwenBridge({
-      message,
-      messages,
+      message, messages,
       image_id: req.body?.imageId,
       plot_id: req.body?.plotId,
       plant_batch_id: req.body?.plantBatchId,
@@ -297,46 +454,151 @@ app.post('/api/qwen/chat', async (req, res) => {
     })
     res.json(response)
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    })
+    res.status(500).json({ success: false, error: error.message })
   }
 })
 
 app.post('/api/qwen/chat/stream', async (req, res) => {
   const message = String(req.body?.message || '').trim()
   const messages = Array.isArray(req.body?.messages) ? req.body.messages : []
-
   if (!message && messages.length === 0) {
-    res.status(400).json({
-      success: false,
-      error: 'message is required'
-    })
+    res.status(400).json({ success: false, error: 'message is required' })
     return
   }
-
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
   res.setHeader('Connection', 'keep-alive')
   res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders?.()
-
   await runQwenBridgeStream(
-    {
-      message,
-      messages,
+    { message, messages,
       image_id: req.body?.imageId,
       plot_id: req.body?.plotId,
       plant_batch_id: req.body?.plantBatchId,
-      storage_path: req.body?.storagePath
-    },
-    req,
-    res
+      storage_path: req.body?.storagePath },
+    req, res
   )
-
   res.end()
 })
+
+// -- YOLO detection --------------------------------------------------------
+
+app.post('/api/detect', upload.single('image'), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ success: false, error: 'No image file uploaded' })
+    return
+  }
+  const imagePath = req.file.path
+  const runPipeline = req.body.run_pipeline === 'true' || req.body.run_pipeline === true
+  try {
+    const response = await runDetectBridge({
+      image_path: imagePath,
+      model_path: req.body.model_path || 'models/yolov8s-seg.pt',
+      conf_threshold: Number(req.body.conf_threshold) || 0.25,
+      run_pipeline: runPipeline,
+      metadata: {
+        image_id: req.body.image_id || req.file.originalname,
+        plot_id: req.body.plot_id,
+        plant_batch_id: req.body.plant_batch_id
+      }
+    })
+    fs.unlink(imagePath, () => {})
+    res.json(response)
+  } catch (error) {
+    fs.unlink(imagePath, () => {})
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+app.post('/api/detect/analyze', upload.single('image'), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ success: false, error: 'No image file uploaded' })
+    return
+  }
+  const imagePath = req.file.path
+  try {
+    const response = await runDetectBridge({
+      image_path: imagePath,
+      model_path: req.body.model_path || 'models/yolov8s-seg.pt',
+      conf_threshold: Number(req.body.conf_threshold) || 0.25,
+      run_pipeline: true,
+      metadata: {
+        image_id: req.body.image_id || req.file.originalname,
+        plot_id: req.body.plot_id,
+        plant_batch_id: req.body.plant_batch_id
+      }
+    })
+    fs.unlink(imagePath, () => {})
+    res.json(response)
+  } catch (error) {
+    fs.unlink(imagePath, () => {})
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// -- Unified detect + Qwen chat --------------------------------------------
+
+app.post('/api/detect/chat', upload.single('image'), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ success: false, error: 'No image file uploaded' })
+    return
+  }
+  const message = String(req.body?.message || '').trim()
+  const messages = safeJsonParse(req.body?.messages, [])
+  if (!message && messages.length === 0) {
+    fs.unlink(req.file.path, () => {})
+    res.status(400).json({ success: false, error: 'message is required' })
+    return
+  }
+  const imagePath = req.file.path
+  try {
+    const response = await runDetectChatBridge({
+      image_path: imagePath, message, messages,
+      model_path: req.body.model_path || 'models/yolov8s-seg.pt',
+      conf_threshold: Number(req.body.conf_threshold) || 0.25
+    })
+    fs.unlink(imagePath, () => {})
+    res.json(response)
+  } catch (error) {
+    fs.unlink(imagePath, () => {})
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+app.post('/api/detect/chat/stream', upload.single('image'), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ success: false, error: 'No image file uploaded' })
+    return
+  }
+  const message = String(req.body?.message || '').trim()
+  const messages = safeJsonParse(req.body?.messages, [])
+  if (!message && messages.length === 0) {
+    fs.unlink(req.file.path, () => {})
+    res.status(400).json({ success: false, error: 'message is required' })
+    return
+  }
+  const imagePath = req.file.path
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  res.flushHeaders?.()
+  try {
+    await runDetectChatBridgeStream(
+      { image_path: imagePath, message, messages,
+        model_path: req.body.model_path || 'models/yolov8s-seg.pt',
+        conf_threshold: Number(req.body.conf_threshold) || 0.25 },
+      req, res
+    )
+  } catch (error) {
+    sendSseEvent(res, { type: 'error', error: error.message })
+  } finally {
+    fs.unlink(imagePath, () => {})
+    res.end()
+  }
+})
+
+// -- Sensors / Devices / History / Alerts / Settings -----------------------
 
 app.get('/api/sensors', (_req, res) => {
   sensorData = {
@@ -349,37 +611,23 @@ app.get('/api/sensors', (_req, res) => {
     ph: Number((6 + Math.random()).toFixed(1)),
     timestamp: new Date().toISOString()
   }
-
-  res.json({
-    success: true,
-    data: sensorData,
-    timestamp: new Date().toISOString()
-  })
+  res.json({ success: true, data: sensorData, timestamp: new Date().toISOString() })
 })
 
 app.get('/api/devices', (_req, res) => {
-  res.json({
-    success: true,
-    data: devices
-  })
+  res.json({ success: true, data: devices })
 })
 
 app.post('/api/devices/:id/control', (req, res) => {
   const deviceId = Number(req.params.id)
   const { action } = req.body
   const device = devices.find((item) => item.id === deviceId)
-
   if (!device) {
-    res.status(404).json({
-      success: false,
-      message: '设备未找到'
-    })
+    res.status(404).json({ success: false, message: '设备未找到' })
     return
   }
-
   device.status = action === 'on'
   device.power = device.status ? Math.round(50 + Math.random() * 50) : 0
-
   res.json({
     success: true,
     message: `设备 ${device.name} 已${device.status ? '开启' : '关闭'}`,
@@ -390,57 +638,32 @@ app.post('/api/devices/:id/control', (req, res) => {
 app.get('/api/history', (req, res) => {
   const period = String(req.query.period || 'day')
   const history = buildHistory(period)
-
-  res.json({
-    success: true,
-    data: history,
-    period,
-    count: history.length
-  })
+  res.json({ success: true, data: history, period, count: history.length })
 })
 
 app.get('/api/alerts', (_req, res) => {
   res.json({
     success: true,
-    data: [
-      {
-        id: 1,
-        type: 'warning',
-        title: '湿度偏低',
-        message: '当前湿度低于设定阈值，建议开启加湿系统。',
-        timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString()
-      }
-    ]
+    data: [{
+      id: 1, type: 'warning', title: '湿度偏低',
+      message: '当前湿度低于设定阈值，建议开启加湿系统。',
+      timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    }]
   })
 })
 
 app.get('/api/charts', (req, res) => {
   const period = String(req.query.period || 'day')
-  res.json({
-    success: true,
-    data: buildHistory(period),
-    period
-  })
+  res.json({ success: true, data: buildHistory(period), period })
 })
 
 app.get('/api/settings', (_req, res) => {
-  res.json({
-    success: true,
-    data: settings
-  })
+  res.json({ success: true, data: settings })
 })
 
 app.post('/api/settings', (req, res) => {
-  settings = {
-    ...settings,
-    ...req.body
-  }
-
-  res.json({
-    success: true,
-    message: '设置已保存',
-    data: settings
-  })
+  settings = { ...settings, ...req.body }
+  res.json({ success: true, message: '设置已保存', data: settings })
 })
 
 app.get('/api/export', (req, res) => {
@@ -448,12 +671,11 @@ app.get('/api/export', (req, res) => {
   res.json({
     success: true,
     message: `已生成 ${format} 导出任务`,
-    data: {
-      format,
-      downloadUrl: `/downloads/greenhouse-export.${format}`
-    }
+    data: { format, downloadUrl: `/downloads/greenhouse-export.${format}` }
   })
 })
+
+// -- Static & SPA fallback -------------------------------------------------
 
 app.use(express.static(distDir))
 
