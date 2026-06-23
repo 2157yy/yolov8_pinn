@@ -9,7 +9,7 @@ Input format::
 
     {
       "image_path": "/path/to/image.jpg",
-      "model_path": "models/strawberry_maturity.pt",
+      "model_path": "models/strawberry-maturity-s-best.pt",
       "conf_threshold": 0.25
     }
 
@@ -60,7 +60,7 @@ MATURITY_COLORS: dict[str, tuple[int, int, int]] = {
     "unripe": (0, 165, 255),     # orange
 }
 
-DEFAULT_MODEL_PATH = "models/strawberry_maturity.pt"
+DEFAULT_MODEL_PATH = "models/strawberry-maturity-s-best.pt"
 DEFAULT_CONF_THRESHOLD = 0.25
 
 

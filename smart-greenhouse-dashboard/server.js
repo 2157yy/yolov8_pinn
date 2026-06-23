@@ -663,7 +663,7 @@ app.post('/api/maturity', upload.single('image'), async (req, res) => {
   try {
     const response = await runMaturityBridge({
       image_path: imagePath,
-      model_path: req.body.model_path || 'models/strawberry_maturity.pt',
+      model_path: req.body.model_path || 'models/strawberry-maturity-s-best.pt',
       conf_threshold: Number(req.body.conf_threshold) || 0.25
     })
     fs.unlink(imagePath, () => {})
