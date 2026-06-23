@@ -15,6 +15,7 @@ const distDir = path.join(__dirname, 'dist')
 const qwenBridgeScript = path.join(projectRoot, 'qwen_web_chat.py')
 const detectBridgeScript = path.join(projectRoot, 'detect_bridge.py')
 const detectChatBridgeScript = path.join(projectRoot, 'detect_chat_bridge.py')
+const maturityBridgeScript = path.join(projectRoot, 'strawberry_maturity_bridge.py')
 const pythonCandidates = process.env.PYTHON_COMMAND
   ? [process.env.PYTHON_COMMAND]
   : process.platform === 'win32'
@@ -595,6 +596,81 @@ app.post('/api/detect/chat/stream', upload.single('image'), async (req, res) => 
   } finally {
     fs.unlink(imagePath, () => {})
     res.end()
+  }
+})
+
+// -- Strawberry maturity detection -----------------------------------------
+
+async function spawnMaturityBridge(payload, command) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [maturityBridgeScript], {
+      cwd: projectRoot,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    })
+
+    let stdout = ''
+    let stderr = ''
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error(`Maturity bridge timed out using ${command}`))
+    }, 120000)
+
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+
+    child.on('error', (error) => { clearTimeout(timer); reject(error) })
+
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code !== 0 && !stdout.trim()) {
+        reject(new Error(stderr.trim() || `${command} exited with code ${code}`))
+        return
+      }
+      try {
+        const parsed = JSON.parse(stdout || '{}')
+        if (!parsed.success) {
+          reject(new Error(parsed.error || 'Maturity bridge returned an unknown error'))
+          return
+        }
+        resolve(parsed)
+      } catch (error) {
+        reject(new Error(`Unable to parse maturity bridge output from ${command}: ${stdout || stderr || error.message}`))
+      }
+    })
+
+    child.stdin.write(JSON.stringify(payload))
+    child.stdin.end()
+  })
+}
+
+async function runMaturityBridge(payload) {
+  const errors = []
+  for (const command of pythonCandidates) {
+    try { return await spawnMaturityBridge(payload, command) }
+    catch (error) { errors.push(`${command}: ${error.message}`) }
+  }
+  throw new Error(errors.join(' | '))
+}
+
+// -- Strawberry maturity endpoint ------------------------------------------
+
+app.post('/api/maturity', upload.single('image'), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ success: false, error: 'No image file uploaded' })
+    return
+  }
+  const imagePath = req.file.path
+  try {
+    const response = await runMaturityBridge({
+      image_path: imagePath,
+      model_path: req.body.model_path || 'models/strawberry_maturity.pt',
+      conf_threshold: Number(req.body.conf_threshold) || 0.25
+    })
+    fs.unlink(imagePath, () => {})
+    res.json(response)
+  } catch (error) {
+    fs.unlink(imagePath, () => {})
+    res.status(500).json({ success: false, error: error.message })
   }
 })
 

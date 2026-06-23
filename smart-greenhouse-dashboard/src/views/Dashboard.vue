@@ -10,6 +10,7 @@
         <span class="pill" :class="{ off: !systemOnline }">{{ systemOnline ? '系统在线' : '系统离线' }}</span>
         <span class="muted">{{ currentTime }}</span>
         <button class="primary" :disabled="refreshing" @click="refreshData">{{ refreshing ? '刷新中...' : '刷新数据' }}</button>
+        <button class="primary nav-btn" @click="goToMaturity">跳转至成熟度检测</button>
       </div>
     </header>
 
@@ -297,6 +298,9 @@ export default {
   methods: {
     updateTime() {
       this.currentTime = new Date().toLocaleString('zh-CN', { hour12: false })
+    },
+    goToMaturity() {
+      this.$router.push('/maturity')
     },
     async refreshData() {
       this.refreshing = true
