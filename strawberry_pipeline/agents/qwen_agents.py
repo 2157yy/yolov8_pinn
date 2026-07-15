@@ -12,7 +12,7 @@ from .diagnosis_agent import RuleBasedDiagnosisAgent
 from .payload_parsers import parse_decision_payload, parse_diagnosis_payload
 
 
-@dataclass(slots=True)
+@dataclass
 class QwenAgentSettings:
     history_limit: int = 5
     temperature: float = 0.1

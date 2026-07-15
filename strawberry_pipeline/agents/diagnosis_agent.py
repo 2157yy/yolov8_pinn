@@ -6,7 +6,7 @@ from ..interfaces import DiagnosisAgent
 from ..schemas import DiagnosisResult, MemoryRecord, PerceptionResult
 
 
-@dataclass(slots=True)
+@dataclass
 class DiagnosisPolicy:
     low_light_threshold: float = 0.30
     bright_light_threshold: float = 0.80

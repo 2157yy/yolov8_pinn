@@ -143,13 +143,13 @@
 
           <aside class="card side">
             <p class="eyebrow">Quick Ask</p>
-            <h3>{{ selectedImage ? '病害检测问题' : '推荐问题' }}</h3>
+            <h3>{{ selectedImage ? '成熟度分析问题' : '推荐问题' }}</h3>
             <div class="stack">
               <button v-for="question in (selectedImage ? diseaseQuestions : suggestedQuestions)" :key="question" class="ghost block" :disabled="qwenLoading" @click="useSuggestedQuestion(question)">{{ question }}</button>
             </div>
             <div class="divider"></div>
             <p class="eyebrow">Live Hints</p>
-            <div class="muted">{{ selectedImage && !qwenLoading ? '点击发送将上传图片进行 YOLO 病害检测 + Qwen 分析' : qwenLoading ? currentThinkingMessage : latestSummaryText }}</div>
+            <div class="muted">{{ selectedImage && !qwenLoading ? '点击发送将上传图片进行 YOLO 成熟度检测 + Qwen 分析' : qwenLoading ? currentThinkingMessage : latestSummaryText }}</div>
           </aside>
         </div>
 
@@ -166,16 +166,16 @@
             @drop.prevent="handleImageDrop"
           >
             <span class="upload-icon">+</span>
-            <span class="muted">上传草莓图片进行病害检测（点击或拖拽）</span>
+            <span class="muted">上传草莓图片进行成熟度分析（点击或拖拽）</span>
           </div>
           <div v-else class="image-preview-row">
             <div class="image-thumb" :style="{ backgroundImage: `url(${selectedImagePreview})` }"></div>
             <div class="image-info">
               <span class="upload-label">{{ selectedImage ? selectedImage.name : '已选择图片' }}</span>
-              <span v-if="detectionCount > 0" class="pill">{{ detectionCount }} 处病害</span>
+              <span v-if="detectionCount > 0" class="pill">{{ detectionCount }} 个目标</span>
               <div class="detection-chips" v-if="latestDetections.length > 0">
                 <span v-for="(d, idx) in latestDetections" :key="idx" class="chip" :class="d.confidence > 0.7 ? 'good' : 'warn'">
-                  {{ d.disease_name }} {{ (d.confidence * 100).toFixed(0) }}%
+                  {{ d.class_name || d.disease_name }} {{ (d.confidence * 100).toFixed(0) }}%
                 </span>
               </div>
             </div>
@@ -240,9 +240,9 @@ export default {
       qwenError: '',
       qwenMessages: [welcomeMessage()],
       suggestedQuestions: ['现在适合采摘吗？', '需要补光吗？', '当前最大风险是什么？'],
-      diseaseQuestions: ['这是什么病害？严重吗？', '应该如何防治？', '是否需要人工复核？', '对产量有什么影响？'],
+      diseaseQuestions: ['这张图里的草莓成熟度怎么样？', '现在适合采摘吗？', '成熟和未熟分别有多少？', '是否建议人工复核？'],
       qwenSession: { imageId: 'web_qwen_image_001', plotId: 'plot_demo', plantBatchId: 'batch_demo' },
-      qwenLoadingHints: ['正在运行 YOLO 病害检测', '正在分析检测结果', '正在整理防治建议', '正在组织自然语言回复'],
+      qwenLoadingHints: ['正在运行 YOLO 成熟度检测', '正在分析检测结果', '正在整理采摘建议', '正在组织自然语言回复'],
       qwenLoadingHintIndex: 0,
       qwenLoadingTimer: null,
       latestContextSummary: null,
@@ -273,8 +273,8 @@ export default {
       if (!summary) return '提问后会先显示分析阶段，再逐步输出答案。'
       if (summary.detection_count !== undefined) {
         return summary.detection_count === 0
-          ? '最近检测：未发现已知病害，植株健康。'
-          : `最近检测：发现 ${summary.detection_count} 处病害。`
+          ? '最近检测：未识别到有效草莓目标。'
+          : `最近检测：识别到 ${summary.detection_count} 个草莓目标。`
       }
       if (summary.harvest === true) return '最近结论：可考虑采摘，建议结合人工复核。'
       if (summary.harvest === false) return '最近结论：暂不建议采摘，建议继续观察。'
@@ -386,10 +386,10 @@ export default {
       const compact = String(reasoning || '').replace(/\s+/g, ' ').trim()
       if (compact) return compact.length > 90 ? compact.slice(-90) : compact
       if (summary?.detections && summary.detections.length > 0) {
-        const names = summary.detections.map((d) => d.disease_name).join('、')
+        const names = summary.detections.map((d) => d.class_name || d.disease_name).join('、')
         return `检测到: ${names}`
       }
-      if (summary?.detection_count === 0) return '未检测到已知病害'
+      if (summary?.detection_count === 0) return '未检测到有效草莓目标'
       if (summary?.decision_message) return `初步结论：${summary.decision_message}`
       return 'Qwen 正在结合检测结果进行推理...'
     },
@@ -399,7 +399,7 @@ export default {
       if (hasDetections) {
         return [
           { label: 'YOLO检测', state: status === 'detecting' ? 'active' : ['ready', 'thinking', 'answering', 'done'].includes(status) ? 'done' : 'todo' },
-          { label: '分析病害', state: status === 'thinking' ? 'active' : ['answering', 'done'].includes(status) ? 'done' : 'todo' },
+          { label: '分析成熟度', state: status === 'thinking' ? 'active' : ['answering', 'done'].includes(status) ? 'done' : 'todo' },
           { label: '生成回复', state: status === 'answering' ? 'active' : status === 'done' ? 'done' : 'todo' }
         ]
       }
@@ -410,8 +410,8 @@ export default {
       ]
     },
     getMessageStatusLabel(message) {
-      if (message.status === 'detecting') return '正在运行 YOLO 病害检测...'
-      if (message.status === 'ready') return '检测完成，正在分析病害结果'
+      if (message.status === 'detecting') return '正在运行 YOLO 成熟度检测...'
+      if (message.status === 'ready') return '检测完成，正在分析成熟度结果'
       if (message.status === 'thinking') return this.currentQwenHint
       if (message.status === 'answering') return '分析完成，正在组织回复'
       return '正在准备上下文'
@@ -420,12 +420,12 @@ export default {
       if (!summary) return []
       if (summary.detections && summary.detections.length > 0) {
         return summary.detections.slice(0, 4).map((d) => ({
-          text: `${d.disease_name} ${(d.confidence * 100).toFixed(0)}%`,
-          tone: d.confidence > 0.7 ? 'warn' : 'info'
+          text: `${d.class_name || d.disease_name} ${(d.confidence * 100).toFixed(0)}%`,
+          tone: d.confidence > 0.7 ? 'good' : 'info'
         }))
       }
       if (summary.detection_count !== undefined) {
-        return [{ text: `检测结果: ${summary.detection_count} 处病害`, tone: summary.detection_count > 0 ? 'warn' : 'good' }]
+        return [{ text: `检测结果: ${summary.detection_count} 个目标`, tone: summary.detection_count > 0 ? 'good' : 'warn' }]
       }
       const chips = []
       if (summary.harvest === true) chips.push({ text: '可考虑采摘', tone: 'good' })
@@ -459,7 +459,7 @@ export default {
           assistantMessage.contextSummary = {
             detection_count: event.detection_count,
             detections: event.detections,
-            scene: event.scene
+            counts: event.counts
           }
         } else {
           assistantMessage.contextSummary = event.context_summary || null
@@ -529,7 +529,7 @@ export default {
     async sendQwenMessage() {
       const content = this.qwenInput.trim()
       if ((!content && !this.selectedImage) || this.qwenLoading) return
-      const userContent = content || '请分析这张图片中的草莓病害情况'
+      const userContent = content || '请分析这张图片中的草莓成熟度情况'
       const hasImage = !!this.selectedImage
       const userMessage = { id: `u-${Date.now()}`, role: 'user', content: userContent, pending: false, reasoning: '', status: 'done', contextSummary: null, timestamp: new Date() }
       const assistantMessage = { id: `a-${Date.now()}`, role: 'assistant', content: '', pending: true, reasoning: '', status: 'queued', contextSummary: null, timestamp: new Date() }
@@ -558,7 +558,7 @@ export default {
 
       try {
         const response = await fetch(apiPath, { method: 'POST', headers, body })
-        if (!response.ok || !response.body) throw new Error(hasImage ? '病害检测服务暂时无法响应' : 'Qwen 暂时无法回答')
+        if (!response.ok || !response.body) throw new Error(hasImage ? '成熟度分析服务暂时无法响应' : 'Qwen 暂时无法回答')
         const reader = response.body.getReader()
         const decoder = new TextDecoder('utf-8')
         let buffer = ''

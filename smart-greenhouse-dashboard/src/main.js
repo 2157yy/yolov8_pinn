@@ -1,21 +1,8 @@
 import { createApp } from 'vue'
-import { createRouter, createWebHashHistory } from 'vue-router'
-import Dashboard from './views/Dashboard.vue'
-import Maturity from './views/Maturity.vue'
+import App from './App.vue'
+import router from './router'
 
-const routes = [
-  { path: '/dashboard', component: Dashboard },
-  { path: '/maturity', component: Maturity },
-  { path: '/', redirect: '/dashboard' },
-  { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
-]
-
-const router = createRouter({
-  history: createWebHashHistory(),
-  routes,
-})
-
-const app = createApp({ template: '<router-view />' })
+const app = createApp(App)
 app.use(router)
 
 app.config.errorHandler = (error) => {

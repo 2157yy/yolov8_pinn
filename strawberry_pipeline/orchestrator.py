@@ -7,7 +7,7 @@ from .interfaces import DecisionAgent, DiagnosisAgent, MemoryAgent, PerceptionMo
 from .schemas import DecisionResult, DiagnosisResult, MemoryQuery, MemoryRecord, PerceptionResult
 
 
-@dataclass(slots=True)
+@dataclass
 class PipelineOutput:
     perception: PerceptionResult
     diagnosis: DiagnosisResult

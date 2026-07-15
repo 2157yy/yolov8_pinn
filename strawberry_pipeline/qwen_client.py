@@ -8,7 +8,7 @@ from typing import Any, Iterator
 from urllib import error, request
 
 
-@dataclass(slots=True)
+@dataclass
 class QwenClientConfig:
     base_url: str
     api_key: str

@@ -6,7 +6,7 @@ from ..interfaces import DecisionAgent
 from ..schemas import DecisionResult, DiagnosisResult, MemoryRecord, PerceptionResult
 
 
-@dataclass(slots=True)
+@dataclass
 class DecisionPolicy:
     harvest_threshold: float = 0.80
     observe_threshold: float = 0.60

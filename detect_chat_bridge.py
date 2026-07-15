@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified bridge: YOLO disease detection + Qwen analysis in one call.
+"""Unified bridge: strawberry maturity detection + Qwen analysis in one call.
 
 Reads a JSON request from stdin, runs YOLO inference on the specified image,
 then feeds the real detection results as context to Qwen for conversational
@@ -9,9 +9,9 @@ Input::
 
     {
       "image_path": "/path/to/strawberry.jpg",
-      "message": "这是什么病害？严重吗？",
+      "message": "这张图里的草莓成熟度怎么样？",
       "messages": [{"role": "user", "content": "..."}],
-      "model_path": "models/yolov8s-seg.pt",
+      "model_path": "models/strawberry-maturity-s-best.pt",
       "conf_threshold": 0.25,
       "stream": false,
       "history": [...]
@@ -45,29 +45,35 @@ if hasattr(sys.stderr, "reconfigure"):
 # system prompt builder
 # ---------------------------------------------------------------------------
 
-def build_disease_system_prompt(detections: list[dict[str, Any]], scene: dict[str, Any]) -> str:
-    """Build a disease-focused system prompt from real YOLO detection results."""
+def build_maturity_system_prompt(
+    detections: list[dict[str, Any]],
+    counts: dict[str, int],
+) -> str:
+    """Build a maturity-focused system prompt from real YOLO maturity results."""
     if detections:
-        lines = ["检测到以下草莓病害：", ""]
+        lines = ["检测到以下草莓成熟度目标：", ""]
         for i, d in enumerate(detections, 1):
             lines.append(
-                f"  {i}. {d['disease_name']} — 置信度 {d['confidence']:.2%}，"
+                f"  {i}. {d['class_name']} — 置信度 {d['confidence']:.2%}，"
                 f"位置 bbox=[{d['bbox']['x1']:.0f}, {d['bbox']['y1']:.0f}, "
                 f"{d['bbox']['x2']:.0f}, {d['bbox']['y2']:.0f}]"
             )
         lines.append("")
-        lines.append(f"共检测到 {len(detections)} 处病害。")
+        lines.append(
+            "统计结果："
+            f"半熟 {counts.get('halfripe', 0)} 个，"
+            f"成熟 {counts.get('ripe', 0)} 个，"
+            f"未熟 {counts.get('unripe', 0)} 个。"
+        )
     else:
-        lines = ["未检测到已知草莓病害，植株表现健康。"]
-
-    lines.append(f"场景光照均值: {scene.get('avg_light', 'N/A')}，时段: {scene.get('time_period', 'N/A')}。")
+        lines = ["未检测到可用的草莓成熟度目标。"]
 
     return (
-        "你是一位草莓病害诊断专家。"
-        "请根据以下YOLO实时检测结果，用中文回答用户关于草莓病害的问题。"
-        "包括但不限于：病害识别、严重程度评估、成因分析、防治建议、是否需要人工复核。"
+        "你是一位草莓成熟度分析专家。"
+        "请根据以下YOLO实时检测结果，用中文回答用户关于草莓成熟度、采摘时机、果实分布和管理建议的问题。"
+        "包括但不限于：成熟/半熟/未熟占比、是否适合采摘、是否建议分批采收、是否需要人工复核。"
         "如果检测结果不确定或置信度较低，请诚实说明。"
-        "不要编造检测结果中没有的病害信息。\n\n"
+        "不要编造检测结果中没有的成熟度信息。\n\n"
         "当前检测结果：\n"
         + "\n".join(lines)
     )
@@ -78,37 +84,17 @@ def build_disease_system_prompt(detections: list[dict[str, Any]], scene: dict[st
 # ---------------------------------------------------------------------------
 
 def run_detection(image_path: str, model_path: str, conf_threshold: float) -> dict[str, Any]:
-    """Run YOLO inference and return serialisable detection + scene data."""
-    from strawberry_pipeline.perception.yolo_adapter import YoloPerceptionAdapter
+    """Run maturity inference and return serialisable detection data."""
+    from strawberry_maturity_bridge import load_model, run_maturity_inference
 
-    adapter = YoloPerceptionAdapter(
-        model_path=model_path,
-        conf_threshold=conf_threshold,
-    )
-    result = adapter.analyze(image=image_path)
-
-    detections = [
-        {
-            "disease_class": d.disease_class,
-            "disease_name": d.disease_name,
-            "confidence": d.confidence,
-            "bbox": {"x1": d.bbox.x1, "y1": d.bbox.y1, "x2": d.bbox.x2, "y2": d.bbox.y2},
-        }
-        for d in result.disease_detections
-    ]
-
-    scene = {
-        "avg_light": result.scene_summary.avg_light,
-        "time_period": result.scene_summary.time_period,
-        "notes": result.scene_summary.notes,
-    }
+    model = load_model(model_path)
+    inference = run_maturity_inference(image_path, model, conf_threshold)
 
     return {
-        "image_id": result.image_id,
-        "timestamp": result.timestamp,
-        "detections": detections,
-        "detection_count": len(detections),
-        "scene": scene,
+        "image_id": Path(image_path).stem,
+        "detections": inference["detections"],
+        "detection_count": len(inference["detections"]),
+        "counts": inference["counts"],
     }
 
 
@@ -120,13 +106,13 @@ def build_chat_response(payload: dict[str, Any]) -> dict[str, Any]:
     from strawberry_pipeline.qwen_client import QwenChatClient
 
     image_path = payload["image_path"]
-    model_path = payload.get("model_path", "models/yolov8s-seg.pt")
+    model_path = payload.get("model_path", "models/strawberry-maturity-s-best.pt")
     conf_threshold = float(payload.get("conf_threshold", 0.25))
 
     detection = run_detection(image_path, model_path, conf_threshold)
 
     client = QwenChatClient.from_env()
-    system_prompt = build_disease_system_prompt(detection["detections"], detection["scene"])
+    system_prompt = build_maturity_system_prompt(detection["detections"], detection["counts"])
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
     history = payload.get("messages")
@@ -149,7 +135,7 @@ def build_chat_response(payload: dict[str, Any]) -> dict[str, Any]:
         "reply": reply,
         "detection_count": detection["detection_count"],
         "detections": detection["detections"],
-        "scene": detection["scene"],
+        "counts": detection["counts"],
         "image_id": detection["image_id"],
     }
 
@@ -171,11 +157,11 @@ def stream_chat_response(payload: dict[str, Any]) -> None:
     from strawberry_pipeline.qwen_client import QwenChatClient
 
     image_path = payload["image_path"]
-    model_path = payload.get("model_path", "models/yolov8s-seg.pt")
+    model_path = payload.get("model_path", "models/strawberry-maturity-s-best.pt")
     conf_threshold = float(payload.get("conf_threshold", 0.25))
 
     # 1. Run detection
-    _write_event({"type": "status", "stage": "detecting", "message": "正在运行 YOLO 病害检测..."})
+    _write_event({"type": "status", "stage": "detecting", "message": "正在运行 YOLO 草莓成熟度检测..."})
     detection = run_detection(image_path, model_path, conf_threshold)
 
     # 2. Send detection summary
@@ -183,13 +169,13 @@ def stream_chat_response(payload: dict[str, Any]) -> None:
         "type": "ready",
         "detection_count": detection["detection_count"],
         "detections": detection["detections"],
-        "scene": detection["scene"],
+        "counts": detection["counts"],
         "image_id": detection["image_id"],
     })
 
     # 3. Build system prompt and call Qwen
     client = QwenChatClient.from_env()
-    system_prompt = build_disease_system_prompt(detection["detections"], detection["scene"])
+    system_prompt = build_maturity_system_prompt(detection["detections"], detection["counts"])
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
     history = payload.get("messages")
@@ -236,7 +222,7 @@ def stream_chat_response(payload: dict[str, Any]) -> None:
         "reasoning": "".join(reasoning_parts),
         "detection_count": detection["detection_count"],
         "detections": detection["detections"],
-        "scene": detection["scene"],
+        "counts": detection["counts"],
     })
 
 
