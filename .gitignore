@@ -1,3 +1,6 @@
+# Python virtual environment
+.venv/
+
 # Python cache
 __pycache__/
 *.py[cod]
@@ -30,6 +33,9 @@ models/._____temp/
 models/.lock/
 models/.mscache/
 models/AI-ModelScope/
+
+# Dataset imports (large, tracked separately)
+dataset-imports/
 
 # Local editor and OS files
 /.vscode/

@@ -11,7 +11,7 @@ from strawberry_pipeline.examples import build_qwen_pipeline
 from strawberry_pipeline.qwen_client import QwenChatClient, QwenClientError
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE = PROJECT_ROOT / "qwen_demo.env"
 DEFAULT_STORAGE_PATH = PROJECT_ROOT / "memory" / "qwen_demo_memory.jsonl"
 ALLOWED_ROLES = {"user", "assistant"}
