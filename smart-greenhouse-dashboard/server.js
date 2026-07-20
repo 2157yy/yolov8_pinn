@@ -3,10 +3,8 @@ import express from 'express'
 import fs from 'fs'
 import multer from 'multer'
 import path from 'path'
-import { spawn, spawnSync } from 'child_process'
+import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
-import { createMaturityDatasetRepository } from './lib/maturityDatasetStore.js'
-import { buildDatasetImportRoot, makeImportId, normalizeUploadedRelativePath } from './lib/maturityFolderImport.js'
 
 const app = express()
 const port = Number(process.env.PORT || 3000)
@@ -15,35 +13,16 @@ const __dirname = path.dirname(__filename)
 const projectRoot = path.resolve(__dirname, '..')
 const distDir = path.join(__dirname, 'dist')
 const qwenBridgeScript = path.join(projectRoot, 'bridges', 'qwen_web_chat.py')
-const detectBridgeScript = path.join(projectRoot, 'bridges', 'detect_bridge.py')
 const detectChatBridgeScript = path.join(projectRoot, 'bridges', 'detect_chat_bridge.py')
-const maturityBridgeScript = path.join(projectRoot, 'bridges', 'strawberry_maturity_bridge.py')
-const maturityDatasetStore = await createMaturityDatasetRepository()
 const pythonCandidates = process.env.PYTHON_COMMAND
   ? [process.env.PYTHON_COMMAND]
   : process.platform === 'win32'
     ? ['py', 'python']
     : ['python3', 'python']
 
-function canRunPythonCommand(command) {
-  const probe = spawnSync(command, ['-c', 'import cv2, ultralytics'], {
-    cwd: projectRoot,
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    encoding: 'utf8'
-  })
-  return probe.status === 0
-}
-
-const preferredPythonCommand = pythonCandidates.find((command) => canRunPythonCommand(command)) || pythonCandidates[0]
-
 const uploadDir = path.join(projectRoot, 'uploads')
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true })
-}
-
-const datasetImportDir = path.join(projectRoot, 'dataset-imports')
-if (!fs.existsSync(datasetImportDir)) {
-  fs.mkdirSync(datasetImportDir, { recursive: true })
 }
 
 const storage = multer.diskStorage({
@@ -66,12 +45,6 @@ const upload = multer({
     }
     cb(null, true)
   }
-})
-
-const folderUpload = multer({
-  storage,
-  preservePath: true,
-  limits: { fileSize: 64 * 1024 * 1024 }
 })
 
 app.use(cors())
@@ -186,7 +159,12 @@ function spawnPython(command, payload) {
 }
 
 async function runQwenBridge(payload) {
-  return spawnPython(preferredPythonCommand, payload)
+  const errors = []
+  for (const command of pythonCandidates) {
+    try { return await spawnPython(command, payload) }
+    catch (error) { errors.push(`${command}: ${error.message}`) }
+  }
+  throw new Error(errors.join(' | '))
 }
 
 function streamWithPython(command, payload, req, res) {
@@ -251,57 +229,12 @@ function streamWithPython(command, payload, req, res) {
 }
 
 async function runQwenBridgeStream(payload, req, res) {
-  await streamWithPython(preferredPythonCommand, payload, req, res)
-}
-
-// ---------------------------------------------------------------------------
-// Detect bridge helpers
-// ---------------------------------------------------------------------------
-
-async function spawnDetectBridge(payload, command) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, [detectBridgeScript], {
-      cwd: projectRoot,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-    })
-
-    let stdout = ''
-    let stderr = ''
-    const timer = setTimeout(() => {
-      child.kill()
-      reject(new Error(`Detect bridge timed out using ${command}`))
-    }, 120000)
-
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
-
-    child.on('error', (error) => { clearTimeout(timer); reject(error) })
-
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      if (code !== 0 && !stdout.trim()) {
-        reject(new Error(stderr.trim() || `${command} exited with code ${code}`))
-        return
-      }
-      try {
-        const parsed = JSON.parse(stdout || '{}')
-        if (!parsed.success) {
-          reject(new Error(parsed.error || 'Detect bridge returned an unknown error'))
-          return
-        }
-        resolve(parsed)
-      } catch (error) {
-        reject(new Error(`Unable to parse detect bridge output from ${command}: ${stdout || stderr || error.message}`))
-      }
-    })
-
-    child.stdin.write(JSON.stringify(payload))
-    child.stdin.end()
-  })
-}
-
-async function runDetectBridge(payload) {
-  return spawnDetectBridge(payload, preferredPythonCommand)
+  const errors = []
+  for (const command of pythonCandidates) {
+    try { await streamWithPython(command, payload, req, res); return }
+    catch (error) { errors.push(`${command}: ${error.message}`) }
+  }
+  sendSseEvent(res, { type: 'error', error: errors.join(' | ') })
 }
 
 // ---------------------------------------------------------------------------
@@ -351,7 +284,12 @@ async function spawnDetectChatBridge(payload, command) {
 }
 
 async function runDetectChatBridge(payload) {
-  return spawnDetectChatBridge(payload, preferredPythonCommand)
+  const errors = []
+  for (const command of pythonCandidates) {
+    try { return await spawnDetectChatBridge(payload, command) }
+    catch (error) { errors.push(`${command}: ${error.message}`) }
+  }
+  throw new Error(errors.join(' | '))
 }
 
 function streamDetectChatBridge(payload, command, req, res) {
@@ -416,7 +354,12 @@ function streamDetectChatBridge(payload, command, req, res) {
 }
 
 async function runDetectChatBridgeStream(payload, req, res) {
-  await streamDetectChatBridge(payload, preferredPythonCommand, req, res)
+  const errors = []
+  for (const command of pythonCandidates) {
+    try { await streamDetectChatBridge(payload, command, req, res); return }
+    catch (error) { errors.push(`${command}: ${error.message}`) }
+  }
+  sendSseEvent(res, { type: 'error', error: errors.join(' | ') })
 }
 
 // ===========================================================================
@@ -482,61 +425,6 @@ app.post('/api/qwen/chat/stream', async (req, res) => {
   res.end()
 })
 
-// -- YOLO detection --------------------------------------------------------
-
-app.post('/api/detect', upload.single('image'), async (req, res) => {
-  if (!req.file) {
-    res.status(400).json({ success: false, error: 'No image file uploaded' })
-    return
-  }
-  const imagePath = req.file.path
-  const runPipeline = req.body.run_pipeline === 'true' || req.body.run_pipeline === true
-  try {
-    const response = await runDetectBridge({
-      image_path: imagePath,
-      model_path: req.body.model_path || 'models/strawberry-maturity-s-best.pt',
-      conf_threshold: Number(req.body.conf_threshold) || 0.25,
-      run_pipeline: runPipeline,
-      metadata: {
-        image_id: req.body.image_id || req.file.originalname,
-        plot_id: req.body.plot_id,
-        plant_batch_id: req.body.plant_batch_id
-      }
-    })
-    fs.unlink(imagePath, () => {})
-    res.json(response)
-  } catch (error) {
-    fs.unlink(imagePath, () => {})
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
-
-app.post('/api/detect/analyze', upload.single('image'), async (req, res) => {
-  if (!req.file) {
-    res.status(400).json({ success: false, error: 'No image file uploaded' })
-    return
-  }
-  const imagePath = req.file.path
-  try {
-    const response = await runDetectBridge({
-      image_path: imagePath,
-      model_path: req.body.model_path || 'models/strawberry-maturity-s-best.pt',
-      conf_threshold: Number(req.body.conf_threshold) || 0.25,
-      run_pipeline: true,
-      metadata: {
-        image_id: req.body.image_id || req.file.originalname,
-        plot_id: req.body.plot_id,
-        plant_batch_id: req.body.plant_batch_id
-      }
-    })
-    fs.unlink(imagePath, () => {})
-    res.json(response)
-  } catch (error) {
-    fs.unlink(imagePath, () => {})
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
-
 // -- Unified detect + Qwen chat --------------------------------------------
 
 app.post('/api/detect/chat', upload.single('image'), async (req, res) => {
@@ -555,7 +443,7 @@ app.post('/api/detect/chat', upload.single('image'), async (req, res) => {
   try {
     const response = await runDetectChatBridge({
       image_path: imagePath, message, messages,
-      model_path: req.body.model_path || 'models/strawberry-maturity-s-best.pt',
+      model_path: req.body.model_path || 'models/yolov8s-seg.pt',
       conf_threshold: Number(req.body.conf_threshold) || 0.25
     })
     fs.unlink(imagePath, () => {})
@@ -587,7 +475,7 @@ app.post('/api/detect/chat/stream', upload.single('image'), async (req, res) => 
   try {
     await runDetectChatBridgeStream(
       { image_path: imagePath, message, messages,
-        model_path: req.body.model_path || 'models/strawberry-maturity-s-best.pt',
+        model_path: req.body.model_path || 'models/yolov8s-seg.pt',
         conf_threshold: Number(req.body.conf_threshold) || 0.25 },
       req, res
     )
@@ -596,282 +484,6 @@ app.post('/api/detect/chat/stream', upload.single('image'), async (req, res) => 
   } finally {
     fs.unlink(imagePath, () => {})
     res.end()
-  }
-})
-
-// -- Strawberry maturity detection -----------------------------------------
-
-async function spawnMaturityBridge(payload, command) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, [maturityBridgeScript], {
-      cwd: projectRoot,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-    })
-
-    let stdout = ''
-    let stderr = ''
-    const timer = setTimeout(() => {
-      child.kill()
-      reject(new Error(`Maturity bridge timed out using ${command}`))
-    }, 120000)
-
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
-
-    child.on('error', (error) => { clearTimeout(timer); reject(error) })
-
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      if (code !== 0 && !stdout.trim()) {
-        reject(new Error(stderr.trim() || `${command} exited with code ${code}`))
-        return
-      }
-      try {
-        const parsed = JSON.parse(stdout || '{}')
-        if (!parsed.success) {
-          reject(new Error(parsed.error || 'Maturity bridge returned an unknown error'))
-          return
-        }
-        resolve(parsed)
-      } catch (error) {
-        reject(new Error(`Unable to parse maturity bridge output from ${command}: ${stdout || stderr || error.message}`))
-      }
-    })
-
-    child.stdin.write(JSON.stringify(payload))
-    child.stdin.end()
-  })
-}
-
-async function runMaturityBridge(payload) {
-  return spawnMaturityBridge(payload, preferredPythonCommand)
-}
-
-// -- Strawberry maturity endpoint ------------------------------------------
-
-app.post('/api/maturity', upload.single('image'), async (req, res) => {
-  if (!req.file) {
-    res.status(400).json({ success: false, error: 'No image file uploaded' })
-    return
-  }
-  const imagePath = req.file.path
-  try {
-    const response = await runMaturityBridge({
-      image_path: imagePath,
-      model_path: req.body.model_path || 'models/strawberry-maturity-s-best.pt',
-      conf_threshold: Number(req.body.conf_threshold) || 0.25
-    })
-    fs.unlink(imagePath, () => {})
-    res.json(response)
-  } catch (error) {
-    fs.unlink(imagePath, () => {})
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
-
-// -- Strawberry maturity dataset management --------------------------------
-
-app.get('/api/maturity-datasets/storage', async (_req, res) => {
-  try {
-    const data = await maturityDatasetStore.getStorageInfo()
-    res.json({ success: true, data })
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
-
-app.get('/api/maturity-datasets/presets', (_req, res) => {
-  res.json({ success: true, data: maturityDatasetStore.getPresets() })
-})
-
-app.get('/api/maturity-datasets', async (_req, res) => {
-  try {
-    const [datasets, storage] = await Promise.all([
-      maturityDatasetStore.listDatasets(),
-      maturityDatasetStore.getStorageInfo()
-    ])
-    res.json({ success: true, data: datasets, storage })
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
-
-app.post('/api/maturity-datasets/import', async (req, res) => {
-  const {
-    name,
-    sourcePath,
-    sourceUrl,
-    classNames,
-    classAliases,
-    sourceType,
-    description,
-    setActive,
-    datasetKey
-  } = req.body || {}
-
-  if (!sourcePath) {
-    res.status(400).json({ success: false, error: 'sourcePath is required' })
-    return
-  }
-
-  try {
-    const response = await maturityDatasetStore.importDataset({
-      name,
-      sourcePath,
-      sourceUrl,
-      classNames,
-      classAliases,
-      sourceType,
-      description,
-      setActive,
-      datasetKey
-    })
-    res.json({ success: true, data: response })
-  } catch (error) {
-    res.status(400).json({ success: false, error: error.message })
-  }
-})
-
-app.post('/api/maturity-datasets/import-folder', folderUpload.any(), async (req, res) => {
-  const importId = makeImportId()
-  const importRoot = buildDatasetImportRoot(datasetImportDir, importId)
-  const payload = req.body || {}
-  const files = Array.isArray(req.files) ? req.files : []
-
-  if (!files.length) {
-    res.status(400).json({ success: false, error: 'No files uploaded' })
-    return
-  }
-
-  try {
-    fs.mkdirSync(importRoot, { recursive: true })
-    const folderName = String(payload.folderName || payload.name || '本地数据集').trim() || '本地数据集'
-    const classNames = typeof payload.classNames === 'string' ? JSON.parse(payload.classNames) : payload.classNames
-    const classAliases = typeof payload.classAliases === 'string' ? JSON.parse(payload.classAliases) : payload.classAliases
-    const datasetKey = payload.datasetKey || undefined
-    const description = String(payload.description || '').trim()
-    const sourceUrl = String(payload.sourceUrl || '').trim() || null
-    const sourceType = String(payload.sourceType || 'yolo').trim() || 'yolo'
-    const setActive = String(payload.setActive ?? 'true') !== 'false'
-
-    const createdDirs = new Set([importRoot])
-    for (const file of files) {
-      const relativePath = normalizeUploadedRelativePath(file.originalname || file.fieldname || path.basename(file.path))
-      const destination = path.join(importRoot, relativePath)
-      const destinationDir = path.dirname(destination)
-      if (!createdDirs.has(destinationDir)) {
-        fs.mkdirSync(destinationDir, { recursive: true })
-        createdDirs.add(destinationDir)
-      }
-      fs.renameSync(file.path, destination)
-    }
-
-    const response = await maturityDatasetStore.importDataset({
-      name: folderName,
-      sourcePath: importRoot,
-      sourceUrl,
-      classNames,
-      classAliases,
-      sourceType,
-      description,
-      setActive,
-      datasetKey
-    })
-
-    res.json({
-      success: true,
-      data: {
-        ...response,
-        importRoot
-      }
-    })
-  } catch (error) {
-    for (const file of files) {
-      try { fs.unlinkSync(file.path) } catch (_) {}
-    }
-    res.status(400).json({ success: false, error: error.message })
-  }
-})
-
-app.get('/api/maturity-datasets/:id', async (req, res) => {
-  try {
-    const dataset = await maturityDatasetStore.getDataset(req.params.id)
-    if (!dataset) {
-      res.status(404).json({ success: false, error: 'Dataset not found' })
-      return
-    }
-    const samples = await maturityDatasetStore.listDatasetSamples(req.params.id, { limit: 12, offset: 0 })
-    res.json({
-      success: true,
-      data: {
-        ...dataset,
-        samples: samples.items,
-        totalSamples: samples.total
-      }
-    })
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
-
-app.get('/api/maturity-datasets/:id/samples', async (req, res) => {
-  const limit = Math.min(Math.max(Number(req.query.limit || 24), 1), 200)
-  const offset = Math.max(Number(req.query.offset || 0), 0)
-  try {
-    const dataset = await maturityDatasetStore.getDataset(req.params.id)
-    if (!dataset) {
-      res.status(404).json({ success: false, error: 'Dataset not found' })
-      return
-    }
-    const samples = await maturityDatasetStore.listDatasetSamples(req.params.id, { limit, offset })
-    const items = samples.items.map((sample) => ({
-      ...sample,
-      previewUrl: `/api/maturity-datasets/${req.params.id}/files?path=${encodeURIComponent(sample.relativeImagePath)}`
-    }))
-    res.json({ success: true, data: items, total: samples.total, dataset })
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
-
-app.post('/api/maturity-datasets/:id/activate', async (req, res) => {
-  try {
-    const dataset = await maturityDatasetStore.setActiveDataset(req.params.id)
-    res.json({ success: true, data: dataset })
-  } catch (error) {
-    const status = /not found/i.test(error.message) ? 404 : 500
-    res.status(status).json({ success: false, error: error.message })
-  }
-})
-
-app.get('/api/maturity-datasets/:id/files', async (req, res) => {
-  const rawPath = String(req.query.path || '').trim()
-  if (!rawPath) {
-    res.status(400).json({ success: false, error: 'path query parameter is required' })
-    return
-  }
-
-  try {
-    const sourcePath = await maturityDatasetStore.getDatasetSourcePath(req.params.id)
-    if (!sourcePath) {
-      res.status(404).json({ success: false, error: 'Dataset not found' })
-      return
-    }
-    const basePath = path.resolve(sourcePath)
-    const normalizedPath = rawPath.replace(/\\/g, '/').replace(/^\/+/, '')
-    const resolvedPath = path.resolve(basePath, normalizedPath)
-    const guardPrefix = `${basePath}${path.sep}`
-    if (resolvedPath !== basePath && !resolvedPath.startsWith(guardPrefix)) {
-      res.status(403).json({ success: false, error: 'Illegal file path' })
-      return
-    }
-    if (!fs.existsSync(resolvedPath)) {
-      res.status(404).json({ success: false, error: 'Image file not found' })
-      return
-    }
-    res.sendFile(resolvedPath)
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message })
   }
 })
 

@@ -8,11 +8,15 @@ __pycache__/
 # Environment files
 .env
 .env.*
-#qwen_demo.env
+qwen_demo.env
 
 # Runtime data
 memory/*.jsonl
 tmp/*.jsonl
+
+# Frontend dependency/build output, never submit as authored source
+smart-greenhouse-dashboard/node_modules/
+smart-greenhouse-dashboard/dist/
 
 # Uploaded images
 uploads/
@@ -27,6 +31,9 @@ models/*.pth
 
 # External cloned dataset repo (4.6 GB, not part of this project)
 strawberry_diseases/
+
+# External framework clone, cite as dependency/upstream material only
+yolo_dev/
 
 # Model download caches
 models/._____temp/

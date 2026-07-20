@@ -1,9 +1,7 @@
 import { createApp } from 'vue'
-import App from './App.vue'
-import router from './router'
+import Dashboard from './views/Dashboard.vue'
 
-const app = createApp(App)
-app.use(router)
+const app = createApp(Dashboard)
 
 app.config.errorHandler = (error) => {
   console.error('Vue application error:', error)

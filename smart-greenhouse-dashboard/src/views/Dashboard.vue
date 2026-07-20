@@ -1,196 +1,188 @@
 <template>
   <div class="page">
+    <svg style="display:none" aria-hidden="true">
+      <filter id="glass-distortion">
+        <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="3" result="noise" />
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="5" xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+    </svg>
+    <div class="bg-decor">
+      <div class="bg-orb o1"></div>
+      <div class="bg-orb o2"></div>
+    </div>
+
     <header class="topbar">
-      <div>
-        <p class="eyebrow">Smart Greenhouse</p>
-        <h1>智能温室草莓监控台</h1>
-        <p class="muted">环境监测、设备状态与 Qwen 流式咨询</p>
+      <div class="topbar-l">
+        <span class="logo-mark"></span>
+        <span class="title-cn">草莓智慧温室</span>
+        <span class="title-en">Smart Greenhouse</span>
       </div>
-      <div class="topbar-right">
-        <span class="pill" :class="{ off: !systemOnline }">{{ systemOnline ? '系统在线' : '系统离线' }}</span>
-        <span class="muted">{{ currentTime }}</span>
-        <button class="primary" :disabled="refreshing" @click="refreshData">{{ refreshing ? '刷新中...' : '刷新数据' }}</button>
-        <button class="primary nav-btn" @click="goToMaturity">跳转至成熟度检测</button>
+      <div class="topbar-r">
+        <span class="clock">{{ currentTime }}</span>
+        <span class="dot" :class="{ on: systemOnline }"></span>
+        <span class="status-text">{{ systemOnline ? 'ONLINE' : 'OFFLINE' }}</span>
       </div>
     </header>
 
-    <main class="content">
-      <section class="metrics">
-        <article v-for="metric in metrics" :key="metric.id" class="card metric" @click="showMetricDetail(metric)">
-          <div class="metric-head">
-            <span>{{ metric.label }}</span>
-            <span class="muted">{{ metric.icon }}</span>
-          </div>
-          <strong class="metric-value">{{ metric.value }}</strong>
-          <div class="muted">{{ metric.range }}</div>
-          <div class="trend" :class="metric.tone">{{ metric.trendText }}</div>
-        </article>
-      </section>
+    <main class="bento">
 
-      <section class="grid">
-        <article class="card">
-          <div class="section-head">
-            <div>
-              <p class="eyebrow">Trend</p>
-              <h2>温度趋势</h2>
+      <!-- 温度 Hero：左 2 列 × 2 行 -->
+      <article class="b-card hero-card">
+        <div class="hero-inner">
+          <div class="hero-top">
+            <span class="eyebrow">TEMPERATURE</span>
+            <strong class="hero-num">{{ currentTemperature.toFixed(1) }}°</strong>
+            <span class="hero-label">温度</span>
+          </div>
+          <div class="hero-gauge">
+            <div class="gauge-ring">
+              <svg viewBox="0 0 100 100">
+                <circle class="ring-bg" cx="50" cy="50" r="42" />
+                <circle class="ring-fill" cx="50" cy="50" r="42"
+                  :style="{ strokeDashoffset: 264 - (264 * gaugePct / 100), stroke: gaugeColor }" />
+              </svg>
+              <div class="gauge-text">{{ gaugeText }}</div>
             </div>
-            <div class="periods">
-              <button v-for="period in chartPeriods" :key="period" class="ghost" :class="{ active: selectedPeriod === period }" @click="selectedPeriod = period">{{ period }}</button>
+            <div class="gauge-info">
+              <span class="gauge-label">状态</span>
+              <span class="gauge-val" :style="{ color: gaugeColor }">{{ gaugeText }}</span>
             </div>
           </div>
-          <div class="chart">
-            <div v-for="(point, index) in temperatureData" :key="index" class="bar" :style="{ height: `${point}%` }"></div>
-          </div>
-        </article>
+        </div>
+      </article>
 
-        <article class="card">
-          <div class="section-head">
-            <div>
-              <p class="eyebrow">Gauge</p>
-              <h2>实时温度</h2>
-            </div>
-            <span class="pill">{{ gaugeText }}</span>
-          </div>
-          <div class="gauge">
-            <div class="gauge-ring" :style="gaugeStyle">
-              <div class="gauge-core">
-                <strong>{{ currentTemperature.toFixed(1) }}°C</strong>
-                <span class="muted">当前温度</span>
-              </div>
-            </div>
-          </div>
-        </article>
-      </section>
+      <!-- 湿度 -->
+      <article class="b-card stat-card">
+        <span class="eyebrow">HUMIDITY</span>
+        <strong class="stat-num humid-num">{{ metrics[1].value }}</strong>
+        <span class="stat-label">湿度</span>
+        <span class="stat-sub">{{ metrics[1].trendText }}</span>
+      </article>
 
-      <section class="grid">
-        <article class="card">
-          <div class="section-head">
-            <div>
-              <p class="eyebrow">Devices</p>
-              <h2>设备控制</h2>
-            </div>
-          </div>
-          <div class="stack">
-            <div v-for="device in devices" :key="device.id" class="row">
-              <div>
-                <div>{{ device.name }}</div>
-                <div class="muted">{{ device.status ? `运行中 · ${device.power || 0}%` : '已关闭' }}</div>
-              </div>
-              <label class="switch">
-                <input type="checkbox" :checked="device.status" @change="toggleDevice(device)" />
-                <span class="slider"></span>
-              </label>
-            </div>
-          </div>
-        </article>
+      <!-- 光照 -->
+      <article class="b-card stat-card">
+        <span class="eyebrow">LIGHT</span>
+        <strong class="stat-num light-num">{{ metrics[2].value }}</strong>
+        <span class="stat-label">光照</span>
+        <span class="stat-sub">{{ metrics[2].trendText }}</span>
+      </article>
 
-        <article class="card">
-          <div class="section-head">
-            <div>
-              <p class="eyebrow">Alerts</p>
-              <h2>报警通知</h2>
-            </div>
-            <button class="ghost" :disabled="alarms.length === 0" @click="clearAlarms">清空</button>
-          </div>
-          <div class="stack">
-            <div v-if="alarms.length === 0" class="empty">暂无报警</div>
-            <div v-for="alarm in alarms" :key="alarm.id" class="row alarm" @click="handleAlarmClick(alarm)">
-              <div>
-                <div>{{ alarm.title }}</div>
-                <div class="muted">{{ alarm.description }}</div>
-              </div>
-              <button class="ghost small" @click.stop="acknowledgeAlarm(alarm)">确认</button>
-            </div>
-          </div>
-        </article>
-      </section>
+      <!-- CO2 -->
+      <article class="b-card stat-card">
+        <span class="eyebrow">CO2</span>
+        <strong class="stat-num co2-num">{{ metrics[3].value }}</strong>
+        <span class="stat-label">二氧化碳</span>
+        <span class="stat-sub">{{ metrics[3].trendText }}</span>
+      </article>
 
-      <section class="card">
-        <div class="section-head">
+      <!-- 土壤湿度 -->
+      <article class="b-card stat-card">
+        <span class="eyebrow">SOIL</span>
+        <strong class="stat-num soil-num">45%</strong>
+        <span class="stat-label">土壤湿度</span>
+        <span class="stat-sub">正常</span>
+      </article>
+
+      <!-- 报警 -->
+      <article class="b-card alert-card">
+        <span class="eyebrow alert-eyebrow">ALERTS</span>
+        <div v-if="alarms.length === 0" class="stat-sub" style="margin-top:6px">暂无报警</div>
+        <div v-for="a in alarms" :key="a.id" class="alert-row" @click="handleAlarmClick(a)">
+          <span class="alert-dot">!</span>
           <div>
-            <p class="eyebrow">Streaming Chat</p>
-            <h2>Qwen 草莓咨询助手</h2>
+            <div class="alert-title">{{ a.title }}</div>
+            <div class="stat-sub" style="font-size:.68rem">{{ a.description }}</div>
           </div>
-          <span class="pill" :class="{ live: qwenLoading }">{{ qwenLoading ? currentQwenHint : '等待提问' }}</span>
         </div>
+      </article>
 
-        <div class="chat-layout">
-          <div ref="chatBox" class="chat">
-            <div v-for="message in qwenMessages" :key="message.id" class="bubble" :class="[message.role, { pending: message.pending }]">
-              <div class="bubble-head">
-                <span>{{ message.role === 'user' ? '你' : 'Qwen' }}</span>
-                <span class="muted">{{ formatChatTime(message.timestamp) }}</span>
+      <!-- 设备 -->
+      <article class="b-card device-card">
+        <span class="eyebrow">DEVICES</span>
+        <div class="dev-list">
+          <div v-for="d in devices" :key="d.id" class="dev-row">
+            <span class="dev-name">{{ d.name }}</span>
+            <label class="toggle">
+              <input type="checkbox" :checked="d.status" @change="toggleDevice(d)" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+        </div>
+      </article>
+
+      <!-- 温度趋势 -->
+      <article class="b-card chart-card">
+        <div class="chart-head">
+          <div>
+            <span class="eyebrow">TREND</span>
+            <span class="chart-title">温度趋势</span>
+          </div>
+          <div class="periods">
+            <button v-for="p in chartPeriods" :key="p" class="p-btn" :class="{ on: selectedPeriod === p }" @click="selectedPeriod = p">{{ p }}</button>
+          </div>
+        </div>
+        <div class="chart-area">
+          <div v-for="(pt, i) in temperatureData" :key="i" class="bar-col">
+            <div class="bar-fill" :style="{ height: pt + '%' }"></div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Qwen 对话 -->
+      <article class="b-card chat-card">
+        <div class="chat-wrap">
+          <div class="chat-main">
+            <div class="chat-top">
+              <span class="eyebrow" style="margin:0">Qwen AI</span>
+              <span class="chat-label">草莓咨询助手</span>
+              <span class="pill" :class="{ live: qwenLoading }">{{ qwenLoading ? '思考中' : '就绪' }}</span>
+            </div>
+
+            <div ref="chatBox" class="chat-list">
+              <div v-for="m in qwenMessages" :key="m.id" class="bubble" :class="[m.role, { pending: m.pending }]">
+                <div class="bubble-head">
+                  <span>{{ m.role === 'user' ? '你' : 'Qwen' }}</span>
+                  <span class="stat-sub" style="font-size:.62rem">{{ formatChatTime(m.timestamp) }}</span>
+                </div>
+                <div v-if="m.pending" class="thinking">
+                  <div class="dots"><span></span><span></span><span></span></div>
+                  <span class="stat-sub" style="font-size:.7rem">{{ getMessageStatusLabel(m) }}</span>
+                  <div v-if="m.contextSummary" class="chips" style="margin-top:3px">
+                    <span v-for="ch in getSummaryChips(m.contextSummary)" :key="ch.text" class="chip" :class="ch.tone">{{ ch.text }}</span>
+                  </div>
+                </div>
+                <div v-if="m.reasoning" class="reasoning-text">{{ m.reasoning }}</div>
+                <div v-if="m.content" class="msg-text">{{ m.content }}<span v-if="m.pending" class="cursor"></span></div>
+                <div v-else-if="m.pending" class="stat-sub" style="margin-top:3px;font-size:.78rem">...</div>
               </div>
+            </div>
 
-              <div v-if="message.pending" class="thinking">
-                <div class="thinking-title">
-                  <span class="dots"><span></span><span></span><span></span></span>
-                  <span>{{ getMessageStatusLabel(message) }}</span>
-                </div>
-                <div class="chips">
-                  <span v-for="stage in getThinkingStages(message)" :key="stage.label" class="chip" :class="stage.state">{{ stage.label }}</span>
-                </div>
-                <div v-if="message.contextSummary" class="chips">
-                  <span v-for="chip in getSummaryChips(message.contextSummary)" :key="chip.text" class="chip" :class="chip.tone">{{ chip.text }}</span>
-                </div>
-                <div class="muted">{{ getThinkingPreview(message.reasoning, message.contextSummary) }}</div>
-              </div>
+            <div v-if="qwenError" class="err-msg">{{ qwenError }}</div>
 
-              <div v-if="message.content" class="message">{{ message.content }}<span v-if="message.pending" class="cursor"></span></div>
-              <div v-else-if="message.pending" class="message muted">正在生成回复...</div>
+            <div class="chat-input-row">
+              <input ref="imageInput" type="file" accept="image/*" hidden @change="handleImageSelect" />
+              <button class="ghost-btn" @click="$refs.imageInput.click()" :disabled="qwenLoading">
+                {{ selectedImage ? '已选图' : '+ 图片' }}
+              </button>
+              <input class="chat-input" v-model="qwenInput" placeholder="输入问题..." @keydown="handleQwenKeydown" :disabled="qwenLoading" />
+              <button class="send-btn" :disabled="qwenLoading || (!qwenInput.trim() && !selectedImage)" @click="sendQwenMessage">
+                {{ qwenLoading ? '...' : '发送' }}
+              </button>
+            </div>
+
+            <div v-if="selectedImage" class="img-tag">
+              <span>{{ selectedImage.name }}</span>
+              <button class="ghost-btn" @click="removeImage" :disabled="qwenLoading" style="padding:2px 7px;font-size:.62rem">×</button>
             </div>
           </div>
 
-          <aside class="card side">
-            <p class="eyebrow">Quick Ask</p>
-            <h3>{{ selectedImage ? '成熟度分析问题' : '推荐问题' }}</h3>
-            <div class="stack">
-              <button v-for="question in (selectedImage ? diseaseQuestions : suggestedQuestions)" :key="question" class="ghost block" :disabled="qwenLoading" @click="useSuggestedQuestion(question)">{{ question }}</button>
-            </div>
-            <div class="divider"></div>
-            <p class="eyebrow">Live Hints</p>
-            <div class="muted">{{ selectedImage && !qwenLoading ? '点击发送将上传图片进行 YOLO 成熟度检测 + Qwen 分析' : qwenLoading ? currentThinkingMessage : latestSummaryText }}</div>
-          </aside>
-        </div>
-
-        <div v-if="qwenError" class="error">{{ qwenError }}</div>
-
-        <div class="upload-section">
-          <input ref="imageInput" type="file" accept="image/*" hidden @change="handleImageSelect" />
-          <div
-            v-if="!selectedImagePreview"
-            class="upload-zone"
-            @click="$refs.imageInput.click()"
-            @dragover.prevent
-            @dragenter.prevent
-            @drop.prevent="handleImageDrop"
-          >
-            <span class="upload-icon">+</span>
-            <span class="muted">上传草莓图片进行成熟度分析（点击或拖拽）</span>
-          </div>
-          <div v-else class="image-preview-row">
-            <div class="image-thumb" :style="{ backgroundImage: `url(${selectedImagePreview})` }"></div>
-            <div class="image-info">
-              <span class="upload-label">{{ selectedImage ? selectedImage.name : '已选择图片' }}</span>
-              <span v-if="detectionCount > 0" class="pill">{{ detectionCount }} 个目标</span>
-              <div class="detection-chips" v-if="latestDetections.length > 0">
-                <span v-for="(d, idx) in latestDetections" :key="idx" class="chip" :class="d.confidence > 0.7 ? 'good' : 'warn'">
-                  {{ d.class_name || d.disease_name }} {{ (d.confidence * 100).toFixed(0) }}%
-                </span>
-              </div>
-            </div>
-            <button class="ghost small" :disabled="qwenLoading" @click.stop="removeImage">移除</button>
+          <div class="chat-side">
+            <span class="eyebrow">QUICK</span>
+            <button v-for="q in (selectedImage ? diseaseQuestions : suggestedQuestions)" :key="q" class="quick-btn" :disabled="qwenLoading" @click="useSuggestedQuestion(q)">{{ q }}</button>
           </div>
         </div>
+      </article>
 
-        <div class="composer">
-          <textarea v-model="qwenInput" rows="4" placeholder="例如：现在适合采摘吗？还需要补光吗？" @keydown="handleQwenKeydown"></textarea>
-          <div class="composer-row">
-            <span class="muted">{{ qwenLoading ? 'Qwen 正在流式输出中' : 'Enter 发送，Shift + Enter 换行' }}</span>
-            <button class="primary" :disabled="qwenLoading" @click="sendQwenMessage">{{ qwenLoading ? '生成中...' : '发送问题' }}</button>
-          </div>
-        </div>
-      </section>
     </main>
   </div>
 </template>
@@ -201,11 +193,7 @@ function welcomeMessage() {
     id: 'welcome',
     role: 'assistant',
     content: '你好，我是 Qwen 草莓咨询助手。你可以直接问我采摘、补光、成熟度和风险建议。',
-    pending: false,
-    reasoning: '',
-    status: 'done',
-    contextSummary: null,
-    timestamp: new Date()
+    pending: false, reasoning: '', status: 'done', contextSummary: null, timestamp: new Date()
   }
 }
 
@@ -219,7 +207,7 @@ export default {
       metrics: [
         { id: 1, label: '温度', value: '25.3°C', range: '适宜范围: 20-30°C', trendText: '平稳', tone: 'ok', icon: 'TEMP' },
         { id: 2, label: '湿度', value: '68%', range: '适宜范围: 60-80%', trendText: '稳定', tone: 'ok', icon: 'HUM' },
-        { id: 3, label: '光照', value: '850 LUX', range: '适宜范围: 800-1200 LUX', trendText: '略偏弱', tone: 'warn', icon: 'LUX' },
+        { id: 3, label: '光照', value: '850 LUX', range: '适宜范围: 800-1200 LUX', trendText: '正常', tone: 'ok', icon: 'LUX' },
         { id: 4, label: 'CO2', value: '420 PPM', range: '适宜范围: 400-600 PPM', trendText: '正常', tone: 'ok', icon: 'CO2' }
       ],
       chartPeriods: ['日', '周', '月'],
@@ -240,9 +228,9 @@ export default {
       qwenError: '',
       qwenMessages: [welcomeMessage()],
       suggestedQuestions: ['现在适合采摘吗？', '需要补光吗？', '当前最大风险是什么？'],
-      diseaseQuestions: ['这张图里的草莓成熟度怎么样？', '现在适合采摘吗？', '成熟和未熟分别有多少？', '是否建议人工复核？'],
+      diseaseQuestions: ['这是什么病害？', '如何防治？', '需要人工复核吗？'],
       qwenSession: { imageId: 'web_qwen_image_001', plotId: 'plot_demo', plantBatchId: 'batch_demo' },
-      qwenLoadingHints: ['正在运行 YOLO 成熟度检测', '正在分析检测结果', '正在整理采摘建议', '正在组织自然语言回复'],
+      qwenLoadingHints: ['正在运行 YOLO 检测', '正在分析结果', '正在整理建议', '正在组织回复'],
       qwenLoadingHintIndex: 0,
       qwenLoadingTimer: null,
       latestContextSummary: null,
@@ -254,36 +242,21 @@ export default {
     }
   },
   computed: {
+    gaugeColor() {
+      const t = Number(this.currentTemperature)
+      return t < 20 ? '#5AC8FA' : t > 30 ? '#FF9500' : '#34C759'
+    },
+    gaugePct() {
+      return Math.max(5, Math.min(95, (Number(this.currentTemperature) - 10) * 3.33))
+    },
     currentQwenHint() {
-      return this.qwenLoadingHints[this.qwenLoadingHintIndex] || 'Qwen 正在思考中'
+      return this.qwenLoadingHints[this.qwenLoadingHintIndex] || '思考中'
     },
     gaugeText() {
-      if (this.currentTemperature < 20) return '温度偏低'
-      if (this.currentTemperature > 30) return '温度偏高'
-      return '温度适宜'
-    },
-    gaugeStyle() {
-      const temp = Number(this.currentTemperature)
-      const color = temp < 20 ? '#38bdf8' : temp > 30 ? '#fb923c' : '#4ade80'
-      const progress = Math.max(0, Math.min(100, (temp - 10) * 3.33))
-      return { background: `conic-gradient(${color} 0% ${progress}%, rgba(255,255,255,0.08) ${progress}% 100%)` }
-    },
-    latestSummaryText() {
-      const summary = this.latestContextSummary
-      if (!summary) return '提问后会先显示分析阶段，再逐步输出答案。'
-      if (summary.detection_count !== undefined) {
-        return summary.detection_count === 0
-          ? '最近检测：未识别到有效草莓目标。'
-          : `最近检测：识别到 ${summary.detection_count} 个草莓目标。`
-      }
-      if (summary.harvest === true) return '最近结论：可考虑采摘，建议结合人工复核。'
-      if (summary.harvest === false) return '最近结论：暂不建议采摘，建议继续观察。'
-      return summary.decision_message || '最近已经生成新的分析结论。'
-    },
-    currentThinkingMessage() {
-      const pending = [...this.qwenMessages].reverse().find((item) => item.pending)
-      if (!pending) return this.latestSummaryText
-      return this.getThinkingPreview(pending.reasoning, pending.contextSummary)
+      const t = Number(this.currentTemperature)
+      if (t < 20) return '偏低'
+      if (t > 30) return '偏高'
+      return '适宜'
     }
   },
   mounted() {
@@ -299,17 +272,11 @@ export default {
     updateTime() {
       this.currentTime = new Date().toLocaleString('zh-CN', { hour12: false })
     },
-    goToMaturity() {
-      this.$router.push('/maturity')
-    },
     async refreshData() {
       this.refreshing = true
       try {
         const [sensorRes, deviceRes, alertRes, historyRes] = await Promise.all([
-          fetch('/api/sensors'),
-          fetch('/api/devices'),
-          fetch('/api/alerts'),
-          fetch('/api/history?period=day')
+          fetch('/api/sensors'), fetch('/api/devices'), fetch('/api/alerts'), fetch('/api/history?period=day')
         ])
         const sensor = await sensorRes.json()
         const device = await deviceRes.json()
@@ -320,10 +287,9 @@ export default {
         if (alert.success) {
           this.alarms = alert.data.map((item) => ({ id: item.id, title: item.title, description: item.message, time: new Date(item.timestamp) }))
         }
-        if (history.success) this.temperatureData = history.data.slice(-12).map((item) => Math.max(36, Math.min(92, item.temperature * 3)))
+        if (history.success) this.temperatureData = history.data.slice(-14).map((item) => Math.max(28, Math.min(94, item.temperature * 3)))
         this.systemOnline = true
       } catch (error) {
-        console.error(error)
         this.systemOnline = false
       } finally {
         this.refreshing = false
@@ -340,17 +306,8 @@ export default {
       device.status = !device.status
       device.power = device.status ? Math.round(55 + Math.random() * 25) : 0
     },
-    showMetricDetail(metric) {
-      window.alert(`${metric.label}\n当前值: ${metric.value}\n${metric.range}\n趋势: ${metric.trendText}`)
-    },
     handleAlarmClick(alarm) {
       window.alert(`${alarm.title}\n${alarm.description}`)
-    },
-    acknowledgeAlarm(alarm) {
-      this.alarms = this.alarms.filter((item) => item.id !== alarm.id)
-    },
-    clearAlarms() {
-      this.alarms = []
     },
     formatChatTime(timestamp) {
       return new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -382,204 +339,122 @@ export default {
         if (box) box.scrollTop = box.scrollHeight
       })
     },
-    getThinkingPreview(reasoning, summary) {
-      const compact = String(reasoning || '').replace(/\s+/g, ' ').trim()
-      if (compact) return compact.length > 90 ? compact.slice(-90) : compact
-      if (summary?.detections && summary.detections.length > 0) {
-        const names = summary.detections.map((d) => d.class_name || d.disease_name).join('、')
-        return `检测到: ${names}`
-      }
-      if (summary?.detection_count === 0) return '未检测到有效草莓目标'
-      if (summary?.decision_message) return `初步结论：${summary.decision_message}`
-      return 'Qwen 正在结合检测结果进行推理...'
-    },
-    getThinkingStages(message) {
-      const status = message.status || 'queued'
-      const hasDetections = this.detectionMode || (message.contextSummary && message.contextSummary.detections)
-      if (hasDetections) {
-        return [
-          { label: 'YOLO检测', state: status === 'detecting' ? 'active' : ['ready', 'thinking', 'answering', 'done'].includes(status) ? 'done' : 'todo' },
-          { label: '分析成熟度', state: status === 'thinking' ? 'active' : ['answering', 'done'].includes(status) ? 'done' : 'todo' },
-          { label: '生成回复', state: status === 'answering' ? 'active' : status === 'done' ? 'done' : 'todo' }
-        ]
-      }
-      return [
-        { label: '读取上下文', state: ['ready', 'thinking', 'answering', 'done'].includes(status) ? 'done' : 'todo' },
-        { label: '分析线索', state: status === 'thinking' ? 'active' : ['answering', 'done'].includes(status) ? 'done' : 'todo' },
-        { label: '生成回复', state: status === 'answering' ? 'active' : status === 'done' ? 'done' : 'todo' }
-      ]
-    },
-    getMessageStatusLabel(message) {
-      if (message.status === 'detecting') return '正在运行 YOLO 成熟度检测...'
-      if (message.status === 'ready') return '检测完成，正在分析成熟度结果'
-      if (message.status === 'thinking') return this.currentQwenHint
-      if (message.status === 'answering') return '分析完成，正在组织回复'
-      return '正在准备上下文'
+    getMessageStatusLabel(m) {
+      if (m.status === 'detecting') return '正在 YOLO 检测...'
+      if (m.status === 'ready') return '检测完成，分析中'
+      if (m.status === 'thinking') return this.currentQwenHint
+      if (m.status === 'answering') return '正在组织回复'
+      return '准备中'
     },
     getSummaryChips(summary) {
       if (!summary) return []
       if (summary.detections && summary.detections.length > 0) {
         return summary.detections.slice(0, 4).map((d) => ({
-          text: `${d.class_name || d.disease_name} ${(d.confidence * 100).toFixed(0)}%`,
-          tone: d.confidence > 0.7 ? 'good' : 'info'
+          text: `${d.disease_name} ${(d.confidence * 100).toFixed(0)}%`,
+          tone: d.confidence > 0.7 ? 'warn' : 'info'
         }))
       }
       if (summary.detection_count !== undefined) {
-        return [{ text: `检测结果: ${summary.detection_count} 个目标`, tone: summary.detection_count > 0 ? 'good' : 'warn' }]
+        return [{ text: `检测: ${summary.detection_count} 处病害`, tone: summary.detection_count > 0 ? 'warn' : 'good' }]
       }
       const chips = []
-      if (summary.harvest === true) chips.push({ text: '可考虑采摘', tone: 'good' })
-      if (summary.harvest === false) chips.push({ text: '暂不建议采摘', tone: 'warn' })
-      if (summary.fill_light === true) chips.push({ text: '建议补光', tone: 'info' })
+      if (summary.harvest === true) chips.push({ text: '可采摘', tone: 'good' })
       if (summary.manual_review === true) chips.push({ text: '建议人工复核', tone: 'warn' })
-      if (summary.confidence_score !== undefined && summary.confidence_score !== null) chips.push({ text: `置信度 ${Number(summary.confidence_score).toFixed(2)}`, tone: 'info' })
+      if (summary.fill_light === true) chips.push({ text: '建议补光', tone: 'info' })
       return chips
     },
-    consumeSseBuffer(buffer, assistantMessage) {
+    consumeSseBuffer(buffer, msg) {
       const parts = buffer.split('\n\n')
       const remain = parts.pop() || ''
       for (const block of parts) {
-        const data = block.split(/\r?\n/).filter((line) => line.startsWith('data: ')).map((line) => line.slice(6)).join('\n')
+        const data = block.split(/\r?\n/).filter((l) => l.startsWith('data: ')).map((l) => l.slice(6)).join('\n')
         if (!data) continue
-        const event = JSON.parse(data)
-        const maybeError = this.applyStreamEvent(event, assistantMessage)
-        if (maybeError) this.qwenError = maybeError
+        const err = this.applyStreamEvent(JSON.parse(data), msg)
+        if (err) this.qwenError = err
       }
       return remain
     },
-    applyStreamEvent(event, assistantMessage) {
-      if (event.type === 'status' && event.stage === 'detecting') {
-        assistantMessage.status = 'detecting'
-      }
+    applyStreamEvent(event, msg) {
+      if (event.type === 'status' && event.stage === 'detecting') msg.status = 'detecting'
       if (event.type === 'ready') {
-        assistantMessage.status = 'ready'
+        msg.status = 'ready'
         if (event.detections) {
           this.detectionCount = event.detection_count || 0
           this.latestDetections = event.detections || []
-          assistantMessage.contextSummary = {
-            detection_count: event.detection_count,
-            detections: event.detections,
-            counts: event.counts
-          }
+          msg.contextSummary = { detection_count: event.detection_count, detections: event.detections, scene: event.scene }
         } else {
-          assistantMessage.contextSummary = event.context_summary || null
+          msg.contextSummary = event.context_summary || null
         }
-        this.latestContextSummary = assistantMessage.contextSummary || this.latestContextSummary
+        this.latestContextSummary = msg.contextSummary || this.latestContextSummary
       }
-      if (event.type === 'thinking' && event.delta) {
-        assistantMessage.status = 'thinking'
-        assistantMessage.reasoning += event.delta
-      }
-      if (event.type === 'answer' && event.delta) {
-        assistantMessage.status = 'answering'
-        assistantMessage.content += event.delta
-      }
+      if (event.type === 'thinking' && event.delta) { msg.status = 'thinking'; msg.reasoning += event.delta }
+      if (event.type === 'answer' && event.delta) { msg.status = 'answering'; msg.content += event.delta }
       if (event.type === 'done') {
-        if (!assistantMessage.content && event.reply) assistantMessage.content = event.reply
-        assistantMessage.contextSummary = event.context_summary || assistantMessage.contextSummary
-        assistantMessage.pending = false
-        assistantMessage.status = 'done'
-        this.latestContextSummary = assistantMessage.contextSummary || this.latestContextSummary
-        if (this.detectionMode) {
-          this.removeImage()
-        }
+        if (!msg.content && event.reply) msg.content = event.reply
+        if (!msg.reasoning && event.reasoning) msg.reasoning = event.reasoning
+        msg.contextSummary = event.context_summary || msg.contextSummary
+        msg.pending = false; msg.status = 'done'
+        this.latestContextSummary = msg.contextSummary || this.latestContextSummary
+        if (this.detectionMode) this.removeImage()
       }
-      if (event.type === 'error') {
-        assistantMessage.pending = false
-        assistantMessage.status = 'done'
-        return event.error || 'Qwen 流式回答失败'
-      }
+      if (event.type === 'error') { msg.pending = false; msg.status = 'done'; return event.error || '流式回答失败' }
       return ''
     },
     handleImageSelect(event) {
       const file = event.target.files?.[0]
-      if (!file) return
-      this.setSelectedImage(file)
-    },
-    handleImageDrop(event) {
-      const file = event.dataTransfer?.files?.[0]
-      if (!file) return
-      this.setSelectedImage(file)
+      if (file) this.setSelectedImage(file)
     },
     setSelectedImage(file) {
-      if (!/\.(jpe?g|png|bmp|tiff?|webp)$/i.test(file.name)) {
-        window.alert('仅支持 jpg、png、bmp、tif、webp 格式的图片')
-        return
-      }
-      this.selectedImage = file
-      this.detectionCount = 0
-      this.latestDetections = []
-      this.detectionMode = true
+      if (!/\.(jpe?g|png|bmp|tiff?|webp)$/i.test(file.name)) { window.alert('不支持该格式'); return }
+      this.selectedImage = file; this.detectionCount = 0; this.latestDetections = []; this.detectionMode = true
       const reader = new FileReader()
-      reader.onload = (e) => {
-        this.selectedImagePreview = e.target.result
-      }
+      reader.onload = (e) => { this.selectedImagePreview = e.target.result }
       reader.readAsDataURL(file)
     },
     removeImage() {
-      this.selectedImage = null
-      this.selectedImagePreview = ''
-      this.detectionCount = 0
-      this.latestDetections = []
-      this.detectionMode = false
-      if (this.$refs.imageInput) {
-        this.$refs.imageInput.value = ''
-      }
+      this.selectedImage = null; this.selectedImagePreview = ''; this.detectionCount = 0; this.latestDetections = []; this.detectionMode = false
+      if (this.$refs.imageInput) this.$refs.imageInput.value = ''
     },
     async sendQwenMessage() {
       const content = this.qwenInput.trim()
       if ((!content && !this.selectedImage) || this.qwenLoading) return
-      const userContent = content || '请分析这张图片中的草莓成熟度情况'
+      const userContent = content || '请分析这张图片中的草莓病害情况'
       const hasImage = !!this.selectedImage
-      const userMessage = { id: `u-${Date.now()}`, role: 'user', content: userContent, pending: false, reasoning: '', status: 'done', contextSummary: null, timestamp: new Date() }
-      const assistantMessage = { id: `a-${Date.now()}`, role: 'assistant', content: '', pending: true, reasoning: '', status: 'queued', contextSummary: null, timestamp: new Date() }
-      const messages = [...this.qwenMessages, userMessage].map((item) => ({ role: item.role, content: item.content }))
-      this.qwenMessages.push(userMessage, assistantMessage)
-      this.qwenInput = ''
-      this.qwenLoading = true
-      this.qwenError = ''
-      this.startQwenTicker()
-      this.scrollChat()
-
+      const userMsg = { id: `u-${Date.now()}`, role: 'user', content: userContent, pending: false, reasoning: '', status: 'done', contextSummary: null, timestamp: new Date() }
+      const asstMsg = { id: `a-${Date.now()}`, role: 'assistant', content: '', pending: true, reasoning: '', status: 'queued', contextSummary: null, timestamp: new Date() }
+      const msgs = [...this.qwenMessages, userMsg].map((m) => ({ role: m.role, content: m.content }))
+      this.qwenMessages.push(userMsg, asstMsg)
+      this.qwenInput = ''; this.qwenLoading = true; this.qwenError = ''
+      this.startQwenTicker(); this.scrollChat()
       const apiPath = hasImage ? '/api/detect/chat/stream' : '/api/qwen/chat/stream'
-      let body
-      let headers = {}
-
+      let body, headers = {}
       if (hasImage) {
         const form = new FormData()
-        form.append('image', this.selectedImage)
-        form.append('message', userContent)
-        form.append('messages', JSON.stringify(messages))
+        form.append('image', this.selectedImage); form.append('message', userContent); form.append('messages', JSON.stringify(msgs))
         body = form
       } else {
         headers['Content-Type'] = 'application/json'
-        body = JSON.stringify({ message: userContent, messages, imageId: this.qwenSession.imageId, plotId: this.qwenSession.plotId, plantBatchId: this.qwenSession.plantBatchId })
+        body = JSON.stringify({ message: userContent, messages: msgs, imageId: this.qwenSession.imageId, plotId: this.qwenSession.plotId, plantBatchId: this.qwenSession.plantBatchId })
       }
-
       try {
-        const response = await fetch(apiPath, { method: 'POST', headers, body })
-        if (!response.ok || !response.body) throw new Error(hasImage ? '成熟度分析服务暂时无法响应' : 'Qwen 暂时无法回答')
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder('utf-8')
-        let buffer = ''
+        const res = await fetch(apiPath, { method: 'POST', headers, body })
+        if (!res.ok || !res.body) throw new Error(hasImage ? '检测服务异常' : 'Qwen 无法响应')
+        const reader = res.body.getReader(); const decoder = new TextDecoder('utf-8'); let buf = ''
         while (true) {
           const { value, done } = await reader.read()
           if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          buffer = this.consumeSseBuffer(buffer, assistantMessage)
+          buf += decoder.decode(value, { stream: true })
+          buf = this.consumeSseBuffer(buf, asstMsg)
           this.scrollChat()
         }
-        buffer += decoder.decode()
-        if (buffer.trim()) this.consumeSseBuffer(buffer, assistantMessage)
-        assistantMessage.pending = false
-      } catch (error) {
-        assistantMessage.pending = false
-        assistantMessage.status = 'done'
-        this.qwenError = error.message || 'Qwen 接入失败'
+        buf += decoder.decode()
+        if (buf.trim()) this.consumeSseBuffer(buf, asstMsg)
+        asstMsg.pending = false
+      } catch (e) {
+        asstMsg.pending = false; asstMsg.status = 'done'
+        this.qwenError = e.message || '接入失败'
       } finally {
-        this.qwenLoading = false
-        this.stopQwenTicker()
-        this.scrollChat()
+        this.qwenLoading = false; this.stopQwenTicker(); this.scrollChat()
       }
     }
   }
@@ -587,26 +462,346 @@ export default {
 </script>
 
 <style scoped>
-.page{min-height:100vh;background:linear-gradient(135deg,#06111d,#0a1d31 55%,#07131f);color:#eef8ff;font-family:'Microsoft YaHei','PingFang SC',sans-serif}
-.topbar,.topbar-right,.section-head,.periods,.composer-row,.chips{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.topbar{justify-content:space-between;padding:20px 24px;background:rgba(7,18,32,.82);border-bottom:1px solid rgba(140,194,255,.14)}
-.content{padding:20px;display:grid;gap:16px}
-.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
-.grid,.chat-layout{display:grid;grid-template-columns:1.35fr 1fr;gap:16px}
-.card{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:18px;box-shadow:0 18px 42px rgba(2,10,20,.26)}
-.eyebrow,.muted{color:#a7c7e5}.eyebrow{margin:0 0 4px;font-size:.78rem;letter-spacing:.12em;text-transform:uppercase}
-h1,h2,h3,p{margin:0}.pill,.chip,.primary,.ghost{border:none;border-radius:999px}.pill{padding:8px 12px;background:rgba(255,255,255,.08)}.pill.off{background:rgba(255,115,87,.14);color:#ffb8aa}.pill.live{background:rgba(65,191,255,.16);color:#a3deff}
-.primary,.ghost{padding:10px 14px;font-weight:700;cursor:pointer}.primary{background:linear-gradient(135deg,#65d6ff,#4d86ff);color:#041224}.ghost{background:rgba(255,255,255,.08);color:#eef7ff}.ghost.active{background:rgba(80,177,255,.2);color:#a6deff}.ghost.small{padding:6px 10px;font-size:.8rem}.ghost.block{width:100%;text-align:left}
-.metric{cursor:pointer}.metric-head,.bubble-head,.row{display:flex;justify-content:space-between;gap:12px}.metric-value{display:block;margin:12px 0 8px;font-size:2rem}.trend{margin-top:10px}.trend.ok,.chip.good{color:#a7f2bd}.trend.warn,.chip.warn{color:#ffd18c}.chip.info{color:#9fdcff}
-.chart{height:220px;display:flex;align-items:flex-end;gap:10px;padding:16px;border-radius:16px;background:rgba(0,0,0,.16)}.bar{flex:1;min-height:18px;border-radius:999px 999px 6px 6px;background:linear-gradient(180deg,#60d8ff,#357dff)}
-.gauge{min-height:220px;display:grid;place-items:center}.gauge-ring{width:210px;height:210px;padding:16px;border-radius:50%;display:grid;place-items:center}.gauge-core{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;background:#081423;text-align:center}
-.stack{display:grid;gap:12px;margin-top:14px}.row,.thinking,.side,.empty{background:rgba(5,15,27,.52);border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:14px}.alarm{cursor:pointer}
-.switch{position:relative;display:inline-block;width:52px;height:28px}.switch input{opacity:0;width:0;height:0}.slider{position:absolute;inset:0;border-radius:999px;background:rgba(255,255,255,.18)}.slider:before{content:'';position:absolute;left:4px;top:4px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .2s ease}input:checked + .slider{background:rgba(88,214,141,.72)}input:checked + .slider:before{transform:translateX(24px)}
-.chat{max-height:460px;overflow-y:auto;display:flex;flex-direction:column;gap:12px}.bubble{max-width:86%;padding:14px 16px;border-radius:18px;border:1px solid rgba(255,255,255,.08)}.bubble.assistant{align-self:flex-start;background:rgba(56,121,255,.12)}.bubble.user{align-self:flex-end;background:rgba(68,178,110,.13)}.bubble.pending{border-color:rgba(111,198,255,.32)}
-.thinking{margin-top:10px;padding:12px}.thinking-title{display:flex;align-items:center;gap:10px;color:#bce7ff}.chips{margin-top:10px}.chip{padding:6px 10px;background:rgba(255,255,255,.07)}.chip.active{background:rgba(75,190,255,.18);color:#b8ebff}.chip.done{background:rgba(87,221,145,.15);color:#a6efc1}
-.message{margin-top:12px;white-space:pre-wrap;line-height:1.72}.cursor{display:inline-block;width:8px;height:1em;margin-left:3px;vertical-align:middle;border-radius:2px;background:#9fe0ff;animation:blink .9s infinite}.dots{display:inline-flex;gap:4px}.dots span{width:7px;height:7px;border-radius:50%;background:#7bd5ff;animation:bounce 1.1s infinite ease-in-out}.dots span:nth-child(2){animation-delay:.15s}.dots span:nth-child(3){animation-delay:.3s}
-.side{height:fit-content}.divider{height:1px;background:rgba(255,255,255,.08);margin:14px 0}.composer{display:grid;gap:12px;margin-top:14px}.composer textarea{width:100%;min-height:108px;padding:14px 16px;border-radius:16px;border:1px solid rgba(255,255,255,.12);background:rgba(3,12,24,.56);color:#f3fbff;resize:vertical}.composer-row{justify-content:space-between}.error{padding:12px 14px;border-radius:14px;background:rgba(255,115,87,.12);color:#ffc0b2}
-@keyframes bounce{0%,80%,100%{transform:translateY(0);opacity:.6}40%{transform:translateY(-4px);opacity:1}}@keyframes blink{0%,45%{opacity:1}55%,100%{opacity:.2}}
-.upload-section{margin-top:14px}.upload-zone{display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px;border:2px dashed rgba(255,255,255,.14);border-radius:16px;cursor:pointer;transition:border-color .2s ease}.upload-zone:hover{border-color:rgba(111,198,255,.42)}.upload-icon{font-size:1.8rem;color:#8cc4ff}.image-preview-row{display:flex;align-items:center;gap:14px;padding:12px;border:1px solid rgba(255,255,255,.1);border-radius:16px;background:rgba(5,15,27,.52)}.image-thumb{width:68px;height:68px;border-radius:12px;background-size:cover;background-position:center;border:1px solid rgba(255,255,255,.14);flex-shrink:0}.image-info{flex:1;min-width:0}.upload-label{font-weight:600}.detection-chips{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
-@media (max-width:1080px){.grid,.chat-layout{grid-template-columns:1fr}}@media (max-width:720px){.topbar{flex-direction:column;align-items:flex-start}.content{padding:16px}.bubble{max-width:100%}.composer-row{flex-direction:column;align-items:stretch}.image-preview-row{flex-direction:column;align-items:stretch}}
+.page {
+  min-height: 100vh;
+  background: url('/photo.jpg') center / cover no-repeat fixed;
+  color: #fff;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  position: relative;
+}
+.bg-decor { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+.bg-orb { position: absolute; border-radius: 50%; filter: blur(140px); }
+.o1 { width: 520px; height: 520px; background: radial-gradient(circle, rgba(0,122,255,.12), transparent); top: -180px; left: -120px; }
+.o2 { width: 380px; height: 380px; background: radial-gradient(circle, rgba(52,199,89,.08), transparent); bottom: 5%; right: -80px; }
+
+/* 顶栏 */
+.topbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 11px 30px;
+  background: rgba(255,255,255,.04);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  position: relative; z-index: 2;
+}
+.topbar-l { display: flex; align-items: center; gap: 10px; }
+.logo-mark { width: 9px; height: 9px; border-radius: 3px; background: linear-gradient(180deg, rgba(0,122,255,.9), rgba(0,122,255,.2)); }
+.title-cn { font-size: 1.05rem; font-weight: 700; letter-spacing: .05em; }
+.title-en { font-size: .62rem; opacity: .4; text-transform: uppercase; letter-spacing: .22em; }
+.topbar-r { display: flex; align-items: center; gap: 9px; }
+.clock { font-size: .74rem; opacity: .55; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: #FF3B30; }
+.dot.on { background: #34C759; box-shadow: 0 0 9px rgba(52,199,89,.5); }
+.status-text { font-size: .62rem; opacity: .4; letter-spacing: .16em; }
+
+/* Bento 网格 */
+.bento {
+  display: grid;
+  grid-template-columns: 1.8fr 1fr 1fr 1fr;
+  gap: 8px;
+  padding: 12px;
+  max-width: 1440px;
+  margin: 0 auto;
+  position: relative; z-index: 1;
+}
+
+/* 卡片基底 —— 液态玻璃 */
+.b-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 20px;
+  padding: 14px 16px;
+  box-shadow: 0 6px 6px rgba(0,0,0,0.2), 0 0 20px rgba(0,0,0,0.1);
+}
+.b-card::before {
+  content: '';
+  position: absolute; z-index: 0; inset: 0;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  filter: url(#glass-distortion);
+}
+.b-card::after {
+  content: '';
+  position: absolute; z-index: 1; inset: 0;
+  background: rgba(255,255,255,0.16);
+  box-shadow: inset 2px 2px 1px 0 rgba(255,255,255,0.5),
+              inset -1px -1px 1px 1px rgba(255,255,255,0.5);
+}
+.b-card > * {
+  position: relative; z-index: 3;
+}
+
+/* ===== Hero 温度 ===== */
+.hero-card {
+  grid-row: 1 / 3;
+  grid-column: 1 / 3;
+  border-radius: 22px;
+  padding: 20px 22px;
+}
+.hero-inner {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+  gap: 12px;
+}
+.hero-num {
+  font-size: 5.4rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -.04em;
+  background: linear-gradient(180deg, rgba(0,122,255,1) 0%, rgba(0,122,255,.5) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  display: block;
+  margin: 6px 0 2px;
+}
+.hero-label { font-size: .84rem; opacity: .75; font-weight: 500; }
+.hero-gauge { display: flex; align-items: center; gap: 14px; margin-top: 4px; }
+.gauge-ring { width: 64px; height: 64px; position: relative; flex-shrink: 0; }
+.gauge-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring-bg { fill: none; stroke: rgba(255,255,255,.05); stroke-width: 5; }
+.ring-fill {
+  fill: none; stroke-width: 5;
+  stroke-linecap: round;
+  stroke-dasharray: 264;
+  transition: stroke-dashoffset .5s ease, stroke .5s ease;
+}
+.gauge-text {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  font-size: .66rem; font-weight: 600;
+  color: rgba(255,255,255,.75);
+}
+.gauge-info { display: flex; flex-direction: column; gap: 1px; }
+.gauge-label { font-size: .6rem; opacity: .35; text-transform: uppercase; letter-spacing: .15em; }
+.gauge-val { font-size: .88rem; font-weight: 600; }
+
+/* ===== 统计卡片 ===== */
+.stat-card {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 12px 15px;
+  border-radius: 18px;
+}
+.stat-num {
+  font-size: 2.2rem; font-weight: 700;
+  line-height: 1.1; letter-spacing: -.03em;
+  margin: 2px 0;
+}
+.stat-label { font-size: .74rem; opacity: .7; font-weight: 500; }
+.stat-sub { font-size: .64rem; opacity: .32; }
+
+.humid-num {
+  background: linear-gradient(180deg, rgba(52,199,89,.95) 0%, rgba(52,199,89,.4) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.light-num {
+  background: linear-gradient(180deg, rgba(255,149,0,.95) 0%, rgba(255,149,0,.4) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.co2-num {
+  background: linear-gradient(180deg, rgba(175,82,222,.9) 0%, rgba(175,82,222,.35) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.soil-num {
+  background: linear-gradient(180deg, rgba(90,200,250,.9) 0%, rgba(90,200,250,.35) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+
+.eyebrow {
+  font-size: .55rem; opacity: .35;
+  text-transform: uppercase; letter-spacing: .2em;
+}
+
+/* ===== 图表 ===== */
+.chart-card {
+  grid-column: 1 / -1;
+  border-radius: 18px;
+  padding: 14px 18px;
+}
+.chart-head { display: flex; justify-content: space-between; align-items: flex-start; }
+.chart-title { font-size: .74rem; opacity: .7; display: block; margin-top: 1px; }
+.periods { display: flex; gap: 3px; }
+.p-btn {
+  background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.05);
+  color: rgba(255,255,255,.45); padding: 2px 9px; border-radius: 999px;
+  font-size: .66rem; cursor: pointer;
+}
+.p-btn.on { background: rgba(255,255,255,.1); color: #fff; border-color: rgba(255,255,255,.12); }
+.chart-area { display: flex; align-items: flex-end; gap: 4px; height: 100px; margin-top: 8px; }
+.bar-col { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.bar-fill {
+  width: 100%; max-width: 24px; margin: 0 auto;
+  border-radius: 4px 4px 2px 2px;
+  background: linear-gradient(180deg, rgba(0,122,255,.55), rgba(0,122,255,.06));
+  min-height: 2px;
+}
+
+/* ===== 报警 ===== */
+.alert-card {
+  grid-column: span 2;
+  border-radius: 16px;
+  padding: 12px 15px;
+}
+.alert-eyebrow { color: rgba(255,59,48,.6); }
+.alert-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 6px; padding: 7px 10px;
+  border-radius: 10px;
+  background: rgba(255,59,48,.03);
+  border: 1px solid rgba(255,59,48,.06);
+  cursor: pointer;
+}
+.alert-row:hover { background: rgba(255,59,48,.06); }
+.alert-dot {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: rgba(255,59,48,.12); color: #FF453A;
+  display: grid; place-items: center;
+  font-weight: 700; font-size: .7rem; flex-shrink: 0;
+}
+.alert-title { font-size: .76rem; font-weight: 600; }
+
+/* ===== 设备 ===== */
+.device-card {
+  grid-column: span 2;
+  border-radius: 16px;
+  padding: 12px 15px;
+}
+.dev-list { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+.dev-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 10px; border-radius: 8px;
+  background: rgba(255,255,255,.012); border: 1px solid rgba(255,255,255,.03);
+}
+.dev-name { font-size: .72rem; opacity: .75; }
+
+.toggle { position: relative; display: inline-block; width: 40px; height: 23px; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-track {
+  position: absolute; inset: 0; border-radius: 999px;
+  background: rgba(255,255,255,.08); cursor: pointer; transition: background .2s;
+}
+.toggle-track::before {
+  content: ''; position: absolute; left: 2px; top: 2px;
+  width: 19px; height: 19px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  transition: transform .2s;
+}
+input:checked + .toggle-track { background: rgba(52,199,89,.45); }
+input:checked + .toggle-track::before { transform: translateX(17px); }
+
+/* ===== 聊天 ===== */
+.chat-card {
+  grid-column: 1 / -1;
+  border-radius: 18px;
+  padding: 14px 18px;
+}
+.chat-wrap { display: grid; grid-template-columns: 1fr 155px; gap: 12px; }
+.chat-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.chat-label { font-size: .76rem; opacity: .7; font-weight: 500; }
+.chat-list { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.bubble {
+  max-width: 82%; padding: 8px 12px; border-radius: 13px;
+  border: 1px solid rgba(255,255,255,.04); background: rgba(255,255,255,.015);
+}
+.bubble.assistant { align-self: flex-start; border-bottom-left-radius: 4px; }
+.bubble.user {
+  align-self: flex-end; border-bottom-right-radius: 4px;
+  background: rgba(0,122,255,.06); border-color: rgba(0,122,255,.08);
+}
+.bubble.pending { border-color: rgba(0,122,255,.14); }
+.bubble-head { display: flex; justify-content: space-between; font-size: .7rem; margin-bottom: 2px; }
+.msg-text { margin-top: 3px; white-space: pre-wrap; line-height: 1.6; font-size: .8rem; }
+.reasoning-text {
+  margin-top: 4px; padding: 6px 8px; border-left: 2px solid rgba(90,200,250,.45);
+  border-radius: 4px; background: rgba(90,200,250,.06); color: rgba(255,255,255,.62);
+  white-space: pre-wrap; line-height: 1.45; font-size: .72rem;
+}
+.cursor { display: inline-block; width: 6px; height: 1em; margin-left: 2px; vertical-align: text-bottom; border-radius: 1px; background: #fff; animation: blink .9s infinite; }
+.thinking { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 4px 8px; margin-top: 2px; border-radius: 6px; background: rgba(255,255,255,.01); }
+
+.chat-input-row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+.chat-input {
+  flex: 1; padding: 7px 12px; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.06); background: rgba(255,255,255,.025);
+  color: #fff; font-size: .76rem; outline: none;
+}
+.chat-input::placeholder { color: rgba(255,255,255,.18); }
+.chat-side {
+  border-left: 1px solid rgba(255,255,255,.03);
+  padding-left: 10px; display: flex; flex-direction: column; gap: 4px;
+}
+.img-tag {
+  display: flex; align-items: center; gap: 5px;
+  margin-top: 6px; padding: 3px 9px; border-radius: 6px;
+  background: rgba(0,122,255,.04); font-size: .66rem;
+}
+
+.pill { padding: 2px 9px; border-radius: 999px; background: rgba(255,255,255,.03); font-size: .64rem; }
+.pill.live { background: rgba(0,122,255,.08); color: #7db9ff; }
+.ghost-btn {
+  background: rgba(255,255,255,.02); border: 1px solid rgba(255,255,255,.04);
+  color: #aaa; cursor: pointer; border-radius: 999px;
+  padding: 4px 11px; font-size: .66rem;
+}
+.ghost-btn:hover { background: rgba(255,255,255,.04); }
+.ghost-btn:disabled { opacity: .25; cursor: not-allowed; }
+.send-btn {
+  background: rgba(0,122,255,.65); border: none; color: #fff;
+  cursor: pointer; border-radius: 999px; padding: 6px 16px;
+  font-size: .72rem; font-weight: 600;
+}
+.send-btn:hover { background: rgba(0,122,255,.8); }
+.send-btn:disabled { opacity: .25; cursor: not-allowed; }
+.quick-btn {
+  background: transparent; border: 1px solid rgba(255,255,255,.03);
+  color: #aaa; cursor: pointer; border-radius: 999px;
+  padding: 3px 10px; font-size: .64rem; text-align: left;
+}
+.quick-btn:hover { border-color: rgba(255,255,255,.08); color: #fff; }
+.quick-btn:disabled { opacity: .2; cursor: not-allowed; }
+
+.err-msg {
+  padding: 6px 10px; margin-top: 6px; border-radius: 8px;
+  background: rgba(255,59,48,.06); color: #ffa098; font-size: .7rem;
+}
+
+.dots { display: inline-flex; gap: 2px; }
+.dots span { width: 4px; height: 4px; border-radius: 50%; background: rgba(255,255,255,.35); animation: bounce 1.1s infinite ease-in-out; }
+.dots span:nth-child(2) { animation-delay: .15s; }
+.dots span:nth-child(3) { animation-delay: .3s; }
+
+.chip {
+  padding: 2px 7px; border-radius: 999px;
+  background: rgba(255,255,255,.02); font-size: .62rem;
+  border: 1px solid rgba(255,255,255,.03);
+}
+.chip.warn { background: rgba(255,149,0,.06); color: #ffb366; border-color: rgba(255,149,0,.08); }
+.chip.good { background: rgba(52,199,89,.06); color: #5cdb7e; border-color: rgba(52,199,89,.08); }
+.chip.info { background: rgba(0,122,255,.06); color: #7db9ff; border-color: rgba(0,122,255,.08); }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: .25; }
+  40% { transform: translateY(-3px); opacity: 1; }
+}
+@keyframes blink {
+  0%, 45% { opacity: 1; }
+  55%, 100% { opacity: .06; }
+}
+
+@media (max-width: 1150px) {
+  .bento { grid-template-columns: 1fr 1fr; }
+  .hero-card { grid-column: 1 / -1; grid-row: auto; }
+  .chart-card { grid-column: 1 / -1; }
+  .chat-wrap { grid-template-columns: 1fr; }
+  .chat-side { display: none; }
+}
+@media (max-width: 640px) {
+  .bento { grid-template-columns: 1fr; gap: 6px; padding: 8px; }
+  .hero-num { font-size: 3.6rem; }
+  .stat-num { font-size: 1.8rem; }
+  .topbar { padding: 9px 14px; }
+  .title-cn { font-size: .84rem; }
+}
 </style>

@@ -1,283 +1,184 @@
 from __future__ import annotations
 
-import json
 import os
-from dataclasses import dataclass
-from pathlib import Path
+import json
+import httpx
 from typing import Any, Iterator
-from urllib import error, request
 
+from dotenv import load_dotenv
+load_dotenv()  #这个语句是自动找env的模型和密钥
 
-@dataclass
-class QwenClientConfig:
-    base_url: str
-    api_key: str
-    model: str
-    timeout_seconds: float = 60.0
-    temperature: float = 0.1
-
-    @classmethod
-    def from_env(cls) -> "QwenClientConfig":
-        _load_default_env_files()
-        base_url = os.getenv("QWEN_BASE_URL", "").strip()
-        api_key = os.getenv("QWEN_API_KEY", "").strip()
-        model = os.getenv("QWEN_MODEL", "").strip()
-        if not base_url:
-            raise ValueError("QWEN_BASE_URL is required")
-        if not api_key:
-            raise ValueError("QWEN_API_KEY is required")
-        if not model:
-            raise ValueError("QWEN_MODEL is required")
-        timeout_seconds = float(os.getenv("QWEN_TIMEOUT_SECONDS", "60"))
-        temperature = float(os.getenv("QWEN_TEMPERATURE", "0.1"))
-        return cls(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            temperature=temperature,
-        )
-
-
-def _load_default_env_files() -> None:
-    env_candidates = []
-    explicit_env_file = os.getenv("QWEN_ENV_FILE", "").strip()
-    if explicit_env_file:
-        env_candidates.append(Path(explicit_env_file))
-
-    cwd = Path.cwd()
-    env_candidates.extend(
-        [
-            cwd / "qwen_demo.env",
-            cwd / ".env",
-        ]
-    )
-
-    seen_paths: set[Path] = set()
-    for candidate in env_candidates:
-        resolved = candidate.expanduser().resolve()
-        if resolved in seen_paths or not resolved.exists():
-            continue
-        seen_paths.add(resolved)
-        _load_env_file(resolved)
-
-
-def _load_env_file(path: Path) -> None:
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        if "=" not in line:
-            continue
-
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
-
-class QwenClientError(RuntimeError):
-    """Raised when the Qwen client cannot produce a valid response."""
+class QwenClientError(Exception):
+    pass
+    
+def extract_json_dict(text: str) -> dict[str, Any]:
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find('{'), text.rfind('}')
+        if start != -1 and end != -1 and start < end:
+            try:
+                result = json.loads(text[start:end+1])
+            except json.JSONDecodeError:
+                raise QwenClientError(f"JSON 截取后仍解析失败，原文本前100字符: {text[:100]}")
+        else:
+            raise QwenClientError(f"未找到 JSON 边界，原文本前100字符: {text[:100]}")
+            
+    if not isinstance(result, dict):
+        raise QwenClientError(f"解析结果非 dict，实际类型为: {type(result).__name__}")
+        
+    return result
 
 
 class QwenChatClient:
-    """Minimal OpenAI-compatible chat client for Qwen-style backends."""
-
-    def __init__(self, config: QwenClientConfig) -> None:
-        self.config = config
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+    ):
+        # 去掉末尾斜杠
+        self.base_url = base_url.rstrip("/")#自动去除末尾斜杠
+        self.api_key = api_key
+        self.model = model
 
     @classmethod
     def from_env(cls) -> "QwenChatClient":
-        return cls(config=QwenClientConfig.from_env())
+        base_url = os.getenv("QWEN_BASE_URL", "").strip()
+        api_key = os.getenv("QWEN_API_KEY", "").strip()
+        model = os.getenv("QWEN_MODEL", "").strip()
+        if not (base_url and api_key and model):
+            raise ValueError(
+                "env环境设置错误"
+            )
+        return cls(base_url, api_key, model)
+    
 
-    def complete_json(
-        self,
-        *,
-        system_prompt: str,
-        user_prompt: str,
-        temperature: float | None = None,
-    ) -> dict[str, Any]:
-        payload = {
-            "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": self.config.temperature if temperature is None else temperature,
-            "response_format": {"type": "json_object"},
+    @property
+    def _chat_url(self) -> str:
+        if self.base_url.endswith("/chat/completions"):
+            return self.base_url
+        if self.base_url.endswith("/v1"):
+            return f"{self.base_url}/chat/completions"
+        return f"{self.base_url}/v1/chat/completions"
+    
+    def _post(self, request_body: dict[str, Any]) -> dict[str, Any]:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}", 
         }
-        raw_response = self._post_json(payload)
-        content = self._extract_message_content(raw_response)
-        return self._extract_json_object(content)
-
+        try:
+            with httpx.Client(timeout=30) as client:
+                response = client.post(self._chat_url, json=request_body, headers=headers)
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:300]
+            raise QwenClientError(
+                f"HTTP {exc.response.status_code} 错误: {detail}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise QwenClientError(f"网络请求失败: {exc}") from exc
+        
     def chat(
         self,
-        *,
         messages: list[dict[str, str]],
-        temperature: float | None = None,
         extra_body: dict[str, Any] | None = None,
     ) -> str:
-        payload: dict[str, Any] = {
-            "model": self.config.model,
+        request_body = {
+            "model": self.model,
             "messages": messages,
-            "temperature": self.config.temperature if temperature is None else temperature,
         }
         if extra_body:
-            payload.update(extra_body)
-        raw_response = self._post_json(payload)
-        return self._extract_message_content(raw_response)
+            request_body.update(extra_body)
 
+        data = self._post(request_body)
+
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise QwenClientError("响应格式无效，无法提取回复内容") from exc
+                 
     def chat_stream(
         self,
-        *,
         messages: list[dict[str, str]],
-        temperature: float | None = None,
         extra_body: dict[str, Any] | None = None,
+        enable_thinking: bool = False,
     ) -> Iterator[dict[str, Any]]:
-        payload: dict[str, Any] = {
-            "model": self.config.model,
+        
+        request_body = {
+            "model": self.model,
             "messages": messages,
-            "temperature": self.config.temperature if temperature is None else temperature,
             "stream": True,
-            "stream_options": {"include_usage": True},
         }
+        if enable_thinking :
+            request_body["enable_thinking"] = True
         if extra_body:
-            payload.update(extra_body)
+            request_body.update(extra_body)
 
-        body = json.dumps(payload).encode("utf-8")
-        req = request.Request(
-            url=self._chat_completions_url(),
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.config.api_key}",
-            },
-        )
-
-        try:
-            with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
-                for raw_line in response:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line or not line.startswith("data:"):
-                        continue
-
-                    chunk_text = line[5:].strip()
-                    if chunk_text == "[DONE]":
-                        yield {"type": "done"}
-                        break
-
-                    try:
-                        parsed = json.loads(chunk_text)
-                    except json.JSONDecodeError as exc:
-                        raise QwenClientError("Qwen stream chunk was not valid JSON") from exc
-
-                    if isinstance(parsed, dict) and parsed.get("error"):
-                        raise QwenClientError(f"Qwen API returned an error: {parsed['error']}")
-
-                    yield self._extract_stream_chunk(parsed)
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise QwenClientError(f"Qwen HTTP error {exc.code}: {detail}") from exc
-        except error.URLError as exc:
-            raise QwenClientError(f"Qwen request failed: {exc.reason}") from exc
-
-    def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:
-        body = json.dumps(payload).encode("utf-8")
-        req = request.Request(
-            url=self._chat_completions_url(),
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.config.api_key}",
-            },
-        )
-        try:
-            with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
-                response_text = response.read().decode("utf-8")
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise QwenClientError(f"Qwen HTTP error {exc.code}: {detail}") from exc
-        except error.URLError as exc:
-            raise QwenClientError(f"Qwen request failed: {exc.reason}") from exc
-
-        try:
-            parsed = json.loads(response_text)
-        except json.JSONDecodeError as exc:
-            raise QwenClientError("Qwen response was not valid JSON") from exc
-
-        if isinstance(parsed, dict) and parsed.get("error"):
-            raise QwenClientError(f"Qwen API returned an error: {parsed['error']}")
-        return parsed
-
-    def _chat_completions_url(self) -> str:
-        base_url = self.config.base_url.rstrip("/")
-        if base_url.endswith("/chat/completions"):
-            return base_url
-        if base_url.endswith("/v1"):
-            return f"{base_url}/chat/completions"
-        return f"{base_url}/v1/chat/completions"
-
-    @staticmethod
-    def _extract_message_content(response_payload: dict[str, Any]) -> str:
-        try:
-            choices = response_payload["choices"]
-            message = choices[0]["message"]
-            content = message["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise QwenClientError("Qwen response did not include a usable assistant message") from exc
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            text_parts = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    text = item.get("text")
-                    if isinstance(text, str):
-                        text_parts.append(text)
-            if text_parts:
-                return "".join(text_parts)
-        raise QwenClientError("Qwen assistant message content was not text")
-
-    @staticmethod
-    def _extract_json_object(content: str) -> dict[str, Any]:
-        stripped = content.strip()
-        try:
-            parsed = json.loads(stripped)
-        except json.JSONDecodeError:
-            start = stripped.find("{")
-            end = stripped.rfind("}")
-            if start == -1 or end == -1 or end <= start:
-                raise QwenClientError("Qwen output did not contain a JSON object")
-            try:
-                parsed = json.loads(stripped[start : end + 1])
-            except json.JSONDecodeError as exc:
-                raise QwenClientError("Qwen output JSON could not be parsed") from exc
-        if not isinstance(parsed, dict):
-            raise QwenClientError("Qwen output JSON was not an object")
-        return parsed
-
-    @staticmethod
-    def _extract_stream_chunk(response_payload: dict[str, Any]) -> dict[str, Any]:
-        choices = response_payload.get("choices") or []
-        usage = response_payload.get("usage")
-        if not choices:
-            return {
-                "type": "usage",
-                "usage": usage,
-            }
-
-        choice = choices[0]
-        delta = choice.get("delta") or {}
-        return {
-            "type": "chunk",
-            "role": delta.get("role"),
-            "content_delta": delta.get("content") or "",
-            "reasoning_delta": delta.get("reasoning_content") or "",
-            "finish_reason": choice.get("finish_reason"),
-            "usage": usage,
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
         }
+
+        try:
+            with httpx.Client(timeout=30) as client:
+                # 注意：这里是 client.stream("POST", url, ...)
+                with client.stream("POST", self._chat_url, json=request_body, headers=headers) as resp:
+                    resp.raise_for_status()
+                
+                    for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        if not line.startswith("data:"):
+                            continue
+                    
+                        data_str = line[len("data:"):].strip()
+                        if data_str == "[DONE]":
+                            break
+                    
+                        try:
+                            chunk = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue  
+                    
+                        choices = chunk.get("choices", [])
+                        content_delta = ""
+                        reasoning_content = ""
+                        finish_reason = None
+                        if choices:
+                            delta = choices[0].get("delta", {})
+                            content_delta = delta.get("content", "")
+                            reasoning_content = delta.get("reasoning_content", "")
+                            finish_reason = choices[0].get("finish_reason")
+
+                        
+                        if content_delta or reasoning_content or finish_reason:
+                            yield {
+                                "type": "chunk",
+                                "content_delta": content_delta,
+                                "reasoning_content": reasoning_content,
+                                "finish_reason": finish_reason,
+                            }
+
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:300]
+            raise QwenClientError(f"HTTP {exc.response.status_code} 错误: {detail}") from exc
+        except httpx.RequestError as exc:
+            raise QwenClientError(f"网络请求失败: {exc}") from exc
+        
+
+if __name__ == "__main__":
+    client = QwenChatClient.from_env()
+    messages = [
+        {"role": "system", "content": "你是一个农业专家，提供专业的农业知识和建议。能够分析温室大棚内的传感器数据，并根据数据提供科学的种植建议。"},
+        {"role": "user", "content": "请根据现在的温湿度和光照强度数据，给出适合的种植建议。温度: 28°C, 湿度: 65%, 光照强度: 12000 lux。"},
+    ]
+    try:
+        for event in client.chat_stream(
+            messages,
+            extra_body={"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
+        ):
+            print(event)  
+    except QwenClientError as e:
+        print("出错:", e)

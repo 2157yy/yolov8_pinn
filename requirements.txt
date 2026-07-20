@@ -1,12 +1,6 @@
-# Core pipeline (standard library only)
-# - run_qwen_demo.py / run_qwen_chat.py / qwen_web_chat.py
-# - strawberry_pipeline/*
-
-# YOLO perception adapter (real inference)
-torch>=2.0.0
 ultralytics>=8.0.0
 opencv-python>=4.8.0
-pillow>=10.0.0
-
-# Recommended Python version:
-# python>=3.10
+httpx>=0.28.0
+python-dotenv>=1.2.0
+numpy>=1.24.0
+-
